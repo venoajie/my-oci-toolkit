@@ -1,4 +1,3 @@
-
 import os
 import sys
 import subprocess
@@ -136,7 +135,7 @@ def validate_command_with_schema(command_parts: list[str]) -> bool:
 
 # --- HELPER FUNCTIONS ---
 def resolve_variables(command_parts: list[str], ci_mode: bool) -> list[str] | None:
-    """Resolves $VAR and ${VAR} from the environment, handling potential shell quotes."""
+    """Resolves $VAR, handles potential quotes, and expands tilde (~) in paths."""
     resolved_parts = []
     available_vars = {**os.environ}
     
@@ -146,7 +145,9 @@ def resolve_variables(command_parts: list[str], ci_mode: bool) -> list[str] | No
         if clean_part.startswith('$'):
             var_name = clean_part.strip('${}')
             if var_name in available_vars:
-                resolved_parts.append(available_vars[var_name])
+                value_from_env = available_vars[var_name]
+                expanded_value = str(Path(value_from_env).expanduser())
+                resolved_parts.append(expanded_value)
             else:
                 if ci_mode:
                     console.print(f"[bold red]Error:[/] Environment variable '{var_name}' not found in CI mode.")
@@ -155,7 +156,9 @@ def resolve_variables(command_parts: list[str], ci_mode: bool) -> list[str] | No
                     console.print(f"[yellow]Warning:[/] Environment variable '[bold]{var_name}[/]' not found.")
                     closest_match, score = process.extractOne(var_name, available_vars.keys(), scorer=fuzz.ratio)
                     if score > 70 and typer.confirm(f"Did you mean '[cyan]{closest_match}[/]'?"):
-                        resolved_parts.append(available_vars[closest_match])
+                        value_from_env = available_vars[closest_match]
+                        expanded_value = str(Path(value_from_env).expanduser())
+                        resolved_parts.append(expanded_value)
                         console.print(f"Using value for [cyan]{closest_match}[/].")
                     else:
                         resolved_parts.append("")
@@ -171,9 +174,8 @@ def preflight_file_check(command_parts: list[str]) -> bool:
                 if not file_path_str or file_path_str.isspace():
                     console.print(f"[bold red]Pre-flight Error:[/] Missing value for file path argument '{part}'.")
                     return False
-                if file_path_str.startswith('file://'):
-                    file_path_str = file_path_str[7:]
-                expanded_path = Path(file_path_str).expanduser()
+                # No need for file:// check here, as it's a direct path now
+                expanded_path = Path(file_path_str).expanduser() # expanduser is safe to call twice
                 if not expanded_path.is_file():
                     console.print(f"[bold red]Pre-flight Error:[/] The file specified for '{part}' does not exist at the resolved path: '[cyan]{expanded_path}[/]'")
                     return False
@@ -220,8 +222,8 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
             stderr_output = redact_output(stderr_output)
         if result.returncode == 0:
             console.print("[bold green]✅ Command Succeeded![/]")
-            if stdout_output: # <-- THIS IS THE FIX
-                print(stdout_output) # <-- THIS IS THE FIX
+            if stdout_output:
+                print(stdout_output)
         else:
             console.print("[bold red]❌ Command Failed![/]")
             error_message = (stderr_output.strip() + "\n" + stdout_output.strip()).strip()
@@ -246,7 +248,7 @@ def learn_command(oci_command: list[str] = typer.Argument(..., help="A successfu
     if resolved_command_for_learn is None:
         console.print("[bold red]Error:[/] Variable resolution failed for the command to learn. Aborting.")
         raise typer.Exit(1)
-    result = subprocess.run(resolved_command_for_learn, capture_output=True, text=True, check=False)
+    result = subprocess.run(resolved_command_for_learn, capture_output=True, text=T, check=False)
     if result.returncode != 0:
         console.print("[bold red]Error:[/] The provided command failed to execute. I can only learn from successful commands.")
         error_message = (result.stderr.strip() + "\n" + result.stdout.strip()).strip()
