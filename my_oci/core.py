@@ -1,8 +1,3 @@
-
-# myoci/core.py
-"""
-Core business logic for the MyOCI toolkit. Adheres to AggressiveModularity.
-"""
 import os
 import sys
 import subprocess
@@ -230,7 +225,7 @@ def learn_from_command(command: list[str], templates_dir: Path, common_schemas: 
     console.print("\n[bold yellow]--- Interactive Schema Builder ---[/bold yellow]")
     for flag, value in parsed_args.items():
         console.print(f"\nProcessing flag: [cyan]{flag}[/cyan]")
-        if typer.confirm(f"  Should this be a [bold]required[/bold] argument?"):
+        if typer.confirm(f"  Should this be a [bold]required[/bold] argument?", default=False):
             schema['required_args'].append(flag)
 
         if not value: continue
@@ -253,6 +248,11 @@ def learn_from_command(command: list[str], templates_dir: Path, common_schemas: 
             pass # Not JSON, just a regular argument
         except Exception as e:
             console.print(f"[yellow]Warning:[/] Could not parse value for '{flag}' to infer a JSON schema: {e}")
+
+    # --- NEW LOGIC: Abort if no validation rules were created ---
+    if not schema['required_args'] and not schema['arg_schemas']:
+        console.print("\n[yellow]No validation rules were defined. Template creation aborted.[/yellow]")
+        return
 
     with open(schema_path, 'w') as f:
         yaml.dump(schema, f, sort_keys=False, indent=2, default_flow_style=False)
