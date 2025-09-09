@@ -1,8 +1,3 @@
-
-# myoci/cli.py
-"""
-The main CLI entry point using Typer. Delegates logic to other modules.
-"""
 import typer
 from pathlib import Path
 from dotenv import load_dotenv
@@ -15,22 +10,28 @@ console = Console()
 app = typer.Typer(help="MyOCI: Your personal architect for the OCI CLI.")
 
 try:
-    # This determines the project root directory by going up one level from this file's directory
-    APP_DIR = Path(__file__).resolve().parent.parent
+    # This determines the location of the currently running script
+    APP_SCRIPT_DIR = Path(__file__).resolve().parent
 except NameError:
-    APP_DIR = Path.cwd()
+    # Fallback for environments where __file__ is not defined
+    APP_SCRIPT_DIR = Path.cwd()
 
-DOTENV_PATH = APP_DIR / ".env"
-TEMPLATES_DIR = APP_DIR / "templates"
+# The project root is one level up from the 'my_oci' package directory
+PROJECT_ROOT_DIR = APP_SCRIPT_DIR.parent
+
+# --- PATH DEFINITIONS ---
+# .env file is in the project root
+DOTENV_PATH = PROJECT_ROOT_DIR / ".env"
+# Templates are now INSIDE the package, relative to this script file
+TEMPLATES_DIR = APP_SCRIPT_DIR / "templates"
+
 TEMPLATES_DIR.mkdir(exist_ok=True)
 load_dotenv(dotenv_path=DOTENV_PATH)
 
 COMMON_SCHEMAS_PATH = TEMPLATES_DIR / "common_schemas.yaml"
 COMMON_SCHEMAS = core.load_common_schemas(COMMON_SCHEMAS_PATH)
 
-
 # --- CLI COMMANDS ---
-
 @app.command("run")
 def run_command(
     oci_command: list[str] = typer.Argument(..., help="The raw OCI command and its arguments.", metavar="OCI_COMMAND_STRING..."),
