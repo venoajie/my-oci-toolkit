@@ -1,4 +1,3 @@
-
 import os
 import sys
 import subprocess
@@ -90,7 +89,7 @@ def validate_command_with_schema(command_parts: list[str]) -> bool | None:
     schema = find_schema_for_command(command_base)
     if not schema:
         console.print("[yellow]Info: No validation schema found for this command. Proceeding without deep validation.[/yellow]")
-        return None # <-- NEW: Return None for skipped validation
+        return None # <-- Return None for skipped validation
 
     console.print(f"✅ Found validation schema: [cyan]{schema['command']}[/cyan]")
     parsed_args = parse_cli_args(command_parts)
@@ -211,34 +210,46 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
         console.rule("[bold red]Session Aborted due to missing file.[/]", style="red")
         raise typer.Exit(1)
     console.print("[green]✅ File paths are valid.[/green]\n")
+    
+    # --- MODIFIED: Smart validation flow ---
     console.print("[3/4] 📝 [bold]Validating command against schema...[/bold]")
-    if not validate_command_with_schema(resolved_command):
+    validation_result = validate_command_with_schema(resolved_command)
+    if validation_result is False: # Explicitly check for failure
         console.rule("[bold red]Session Aborted due to validation failure.[/]", style="red")
-        #raise typer.Exit(1)
-    console.print("[green]✅ Validation successful.[/green]\n")
+        raise typer.Exit(1)
+    if validation_result is True: # Only print success if it actually passed
+        console.print("[green]✅ Validation successful.[/green]\n")
+    else: # This handles the 'None' case
+        console.print("") # Just add a newline for spacing
+
     console.print("[4/4] ▶️  [bold]Executing command...[/bold]")
     try:
         result = subprocess.run(resolved_command, capture_output=True, text=True, check=False)
         stdout_output = result.stdout
         stderr_output = result.stderr
+        
+        # Redact before printing anything
         if redact:
             stdout_output = redact_output(stdout_output)
             stderr_output = redact_output(stderr_output)
+            
         if result.returncode == 0:
             console.print("[bold green]✅ Command Succeeded![/]")
             if stdout_output:
                 print(stdout_output)
         else:
-            # --- START OF THE FIX ---
             console.print("[bold red]❌ Command Failed![/]")
             human_readable_command = shlex.join(resolved_command)
+            # --- MODIFIED: Redact the debug command string ---
+            if redact:
+                human_readable_command = redact_output(human_readable_command)
             console.print(f"[bold yellow]🔎 Final command executed:[/bold yellow]\n[cyan]{human_readable_command}[/cyan]\n")
+            
             error_message = (stderr_output.strip() + "\n" + stdout_output.strip()).strip()
             if error_message:
                 console.print(error_message)
             else:
                 console.print("[red]No error output from OCI CLI.[/red]")
-            # --- END OF THE FIX ---
     except FileNotFoundError:
         console.print("[bold red]Error:[/] 'oci' command not found. Is the OCI CLI installed in your PATH?")
         raise typer.Exit(1)
@@ -254,6 +265,7 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
 @app.command("learn")
 def learn_command(oci_command: list[str] = typer.Argument(..., help="A successful OCI command to learn from.", metavar="OCI_COMMAND_STRING...")):
     command_to_learn = oci_command
+    # ... (rest of the learn function is the same) ...
     console.print("🎓 [bold]Learning Mode:[/bold] I will run this command to verify it succeeds.")
     resolved_command_for_learn = resolve_variables(command_to_learn, ci_mode=False)
     if resolved_command_for_learn is None:
