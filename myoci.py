@@ -1,3 +1,4 @@
+
 import os
 import sys
 import subprocess
@@ -140,7 +141,6 @@ def resolve_variables(command_parts: list[str], ci_mode: bool) -> list[str] | No
     available_vars = {**os.environ}
     
     for part in command_parts:
-        # NEW: Make a clean version of the part, stripping potential quotes
         clean_part = part.strip("'\"") 
         
         if clean_part.startswith('$'):
@@ -220,7 +220,8 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
             stderr_output = redact_output(stderr_output)
         if result.returncode == 0:
             console.print("[bold green]✅ Command Succeeded![/]")
-            if stdout_output: print(stdout_output)
+            if stdout_output: # <-- THIS IS THE FIX
+                print(stdout_output) # <-- THIS IS THE FIX
         else:
             console.print("[bold red]❌ Command Failed![/]")
             error_message = (stderr_output.strip() + "\n" + stdout_output.strip()).strip()
