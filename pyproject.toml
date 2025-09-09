@@ -13,6 +13,5 @@ dependencies = [
     "jsonschema", 
 ]
 
-
 [project.scripts]
-myoci = "myoci:app"
+my_oci = "my_oci.cli:app"

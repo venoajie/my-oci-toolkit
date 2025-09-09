@@ -1,0 +1,6 @@
+command: oci network vcn list
+required_args:
+- --compartment-id
+arg_schemas:
+  --compartment-id:
+    $ref: "common_oci_args.compartment_id"
