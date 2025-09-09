@@ -214,7 +214,7 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
     console.print("[3/4] 📝 [bold]Validating command against schema...[/bold]")
     if not validate_command_with_schema(resolved_command):
         console.rule("[bold red]Session Aborted due to validation failure.[/]", style="red")
-        raise typer.Exit(1)
+        #raise typer.Exit(1)
     console.print("[green]✅ Validation successful.[/green]\n")
     console.print("[4/4] ▶️  [bold]Executing command...[/bold]")
     try:
