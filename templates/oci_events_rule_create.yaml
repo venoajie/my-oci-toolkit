@@ -1,0 +1,17 @@
+# templates/oci_events_rule_create.yaml
+command: oci events rule create
+required_args:
+- --display-name
+- --is-enabled
+- --compartment-id
+- --condition
+- --actions
+arg_schemas:
+  --compartment-id:
+    $ref: "common_oci_args.compartment_id" # This is the reference!
+  --condition:
+    type: object
+    description: "The JSON object defining the event condition."
+  --actions:
+    type: object # For now, we'll just check that it's a valid JSON object/file.
+    description: "The JSON object or file defining the actions to take."

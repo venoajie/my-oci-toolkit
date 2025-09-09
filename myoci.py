@@ -2,262 +2,304 @@ import os
 import sys
 import subprocess
 import typer
-import shlex
 import re
-import difflib
+import json
+import yaml
 from pathlib import Path
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.rule import Rule
 from rapidfuzz import process, fuzz
-
-# A simple in-memory cache for command flags
-FLAG_CACHE = {}
+from jsonschema import validate, ValidationError
 
 # --- SETUP & CONFIGURATION ---
 console = Console()
-
-# Path-aware configuration to ensure the script can be run from anywhere
 try:
     SCRIPT_DIR = Path(__file__).resolve().parent
 except NameError:
-    SCRIPT_DIR = Path.cwd() # Fallback for interactive interpreters
+    SCRIPT_DIR = Path.cwd()
 
 DOTENV_PATH = SCRIPT_DIR / ".env"
-COOKBOOK_PATH = SCRIPT_DIR / "cookbook.md"
+TEMPLATES_DIR = SCRIPT_DIR / "templates"
+TEMPLATES_DIR.mkdir(exist_ok=True)
 load_dotenv(dotenv_path=DOTENV_PATH)
 
-# --- HELPER FUNCTIONS ---
+FILE_PATH_FLAGS = ["--ssh-authorized-keys-file", "--file", "--from-json", "--actions"]
 
-def get_valid_flags_for_command(command_parts: list[str]) -> list[str]:
-    """
-    Runs the --help command for a given OCI command path and caches the valid flags.
-    """
-    command_key = " ".join(command_parts)
-    if command_key in FLAG_CACHE:
-        return FLAG_CACHE[command_key]
+# --- NEW: LOAD COMMON SCHEMAS ON STARTUP ---
+COMMON_SCHEMAS_PATH = TEMPLATES_DIR / "common_schemas.yaml"
+COMMON_SCHEMAS = {}
+if COMMON_SCHEMAS_PATH.is_file():
+    with open(COMMON_SCHEMAS_PATH, 'r') as f:
+        COMMON_SCHEMAS = yaml.safe_load(f)
+        console.print(f"✅ Loaded common schemas from [cyan]{COMMON_SCHEMAS_PATH.name}[/cyan]")
 
-    try:
-        help_command = command_parts + ["--help"]
-        result = subprocess.run(help_command, capture_output=True, text=True, check=True)
-        # Use regex to find all lines starting with --option
-        valid_flags = re.findall(r"^\s+(--[a-zA-Z0-9-]+)", result.stdout, re.MULTILINE)
-        FLAG_CACHE[command_key] = valid_flags
-        return valid_flags
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        # If we can't get help, we can't check. Return empty list.
-        return []
+# --- CORE VALIDATION LOGIC ---
 
-def preflight_syntax_check(command_parts: list[str]) -> list[str] | None:
-    """
-    Checks for flag typos using Levenshtein distance before execution.
-    """
-    # Find the command path (e.g., ['oci', 'compute', 'instance', 'list'])
-    command_path = []
-    for part in command_parts:
+def resolve_schema_ref(ref_path: str) -> dict | None:
+    """Finds a schema in COMMON_SCHEMAS from a path like 'group.schema_name'."""
+    keys = ref_path.split('.')
+    current_level = COMMON_SCHEMAS
+    for key in keys:
+        if isinstance(current_level, dict) and key in current_level:
+            current_level = current_level[key]
+        else:
+            return None # Path not found
+    return current_level
+
+def find_schema_for_command(command_parts: list[str]) -> dict | None:
+    command_base = [p for p in command_parts if not p.startswith('--')][:4]
+    if not command_base:
+        return None
+    command_key = "_".join(command_base).replace(" ", "_")
+    schema_path = TEMPLATES_DIR / f"{command_key}.yaml"
+    if schema_path.is_file():
+        with open(schema_path, 'r') as f:
+            return yaml.safe_load(f)
+    return None
+
+def parse_cli_args(command_parts: list[str]) -> dict:
+    args = {}
+    i = 0
+    while i < len(command_parts):
+        part = command_parts[i]
         if part.startswith('--'):
-            break
-        command_path.append(part)
+            if i + 1 < len(command_parts) and not command_parts[i+1].startswith('--'):
+                args[part] = command_parts[i+1]
+                i += 2
+            else:
+                args[part] = None
+                i += 1
+        else:
+            i += 1
+    return args
+
+def load_json_from_value(value: str) -> any:
+    if value.startswith('file://'):
+        file_path = Path(value[7:]).expanduser()
+        if not file_path.is_file():
+            raise FileNotFoundError(f"The file specified in the command does not exist: {file_path}")
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    else:
+        return json.loads(value)
+
+def validate_command_with_schema(command_parts: list[str]) -> bool:
+    """The main validation engine. Checks a command against its schema."""
+    command_base = [p for p in command_parts if not p.startswith('--')][:4]
+    schema = find_schema_for_command(command_base)
+    if not schema:
+        console.print("[yellow]Info: No validation schema found for this command. Proceeding without deep validation.[/yellow]")
+        return True
+
+    console.print(f"✅ Found validation schema: [cyan]{schema['command']}[/cyan]")
+    parsed_args = parse_cli_args(command_parts)
+
+    for required in schema.get('required_args', []):
+        if required not in parsed_args:
+            console.print(f"[bold red]Validation Error:[/] Missing required argument: {required}")
+            return False
+
+    # UPGRADED: This loop now handles simple and complex validation
+    for arg_name, arg_schema in schema.get('arg_schemas', {}).items():
+        if arg_name in parsed_args:
+            value = parsed_args[arg_name]
+            
+            # --- NEW: Resolve $ref if it exists ---
+            if '$ref' in arg_schema:
+                resolved_schema = resolve_schema_ref(arg_schema['$ref'])
+                if not resolved_schema:
+                    console.print(f"[yellow]Warning: Could not resolve schema reference '{arg_schema['$ref']}' for '{arg_name}'. Skipping validation.[/yellow]")
+                    continue
+                arg_schema = resolved_schema
+
+            # Check for missing value
+            if value is None and arg_schema.get('type') != 'boolean':
+                console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] Expected a value, but none was provided.")
+                return False
+
+            try:
+                # Validate complex types (JSON)
+                if arg_schema.get('type') in ['object', 'array']:
+                    instance = load_json_from_value(value)
+                    validate(instance=instance, schema=arg_schema)
+                # Validate simple types (string with pattern, etc.)
+                else:
+                    instance = value
+                    validate(instance=instance, schema=arg_schema)
+
+            except ValidationError as e:
+                # Provide more helpful error for pattern failures
+                if 'pattern' in arg_schema and 'does not match' in e.message:
+                    console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] Value does not match the required format.")
+                    if arg_schema.get('description'):
+                        console.print(f"  [bold cyan]Hint:[/] {arg_schema['description']}")
+                else:
+                    console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] {e.message}")
+                return False
+            except Exception as e:
+                console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] {e}")
+                return False
     
-    valid_flags = get_valid_flags_for_command(command_path)
-    if not valid_flags:
-        return command_parts # Cannot check, proceed as is
+    console.print("[green]✅ Command passed all structural and format validation checks.[/green]")
+    return True
 
-    corrected_parts = []
-    for part in command_parts:
-        if part.startswith('--') and "=" not in part: # Check simple flags like --compartment-id
-            if part not in valid_flags:
-                # Find the best match with a high score threshold
-                best_match = process.extractOne(part, valid_flags, scorer=fuzz.WRatio, score_cutoff=80)
-                if best_match:
-                    suggestion = best_match[0]
-                    if typer.confirm(f"⚠️ Syntax Warning: Invalid flag [yellow]'{part}'[/]. Did you mean [green]'{suggestion}'[/]?"):
-                        corrected_parts.append(suggestion)
-                        continue
-        corrected_parts.append(part)
-    
-    return corrected_parts
-
-def redact_all_pii(text: str) -> str:
-    """Redacts OCIDs and IPv4 addresses from a string."""
-    if not text:
-        return ""
-    # Redact OCIDs: ocid1.resource.realm..uniqueID -> ocid1.resource.realm..aaaa****
-    text = re.sub(r"(ocid1\.[a-z]+\.oc1\.\.[a-z0-9]{4})[a-z0-9]+", r"\1****", text)
-    # Redact IPv4 addresses
-    text = re.sub(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", "[REDACTED_IP]", text)
-    return text
-
+# ... (rest of helper functions are unchanged) ...
 def resolve_variables(command_parts: list[str], ci_mode: bool) -> list[str] | None:
-    """
-    Parses command for $VARS, resolves them from the environment,
-    and suggests corrections for near misses.
-    """
     resolved_parts = []
-    available_vars = {k: v for k, v in os.environ.items() if k.startswith("OCI_")}
-
+    available_vars = {**os.environ}
+    
     for part in command_parts:
         if part.startswith('$'):
-            var_name = part.strip('$')
+            var_name = part.strip('${}')
             if var_name in available_vars:
                 resolved_parts.append(available_vars[var_name])
             else:
-                matches = difflib.get_close_matches(var_name, available_vars.keys())
-                if matches and not ci_mode:
-                    suggestion = matches[0]
-                    if typer.confirm(
-                        f"⚠️ Variable [bold yellow]${var_name}[/] not found. Did you mean [bold green]${suggestion}[/]?"
-                    ):
-                        resolved_parts.append(available_vars[suggestion])
-                    else:
-                        console.print("[bold red]Aborting due to unresolved variable.[/]")
-                        return None
-                else:
-                    err_msg = f"Error: Variable ${var_name} not found."
-                    if matches:
-                        err_msg += f" A close match '{matches[0]}' exists. Aborting in non-interactive mode."
-                    console.print(f"[bold red]{err_msg}[/]")
+                if ci_mode:
+                    console.print(f"[bold red]Error:[/] Environment variable '{var_name}' not found in CI mode.")
                     return None
+                else:
+                    console.print(f"[yellow]Warning:[/] Environment variable '[bold]{var_name}[/]' not found.")
+                    closest_match, score = process.extractOne(var_name, available_vars.keys(), scorer=fuzz.ratio)
+                    if score > 70 and typer.confirm(f"Did you mean '[cyan]{closest_match}[/]'?"):
+                        resolved_parts.append(available_vars[closest_match])
+                        console.print(f"Using value for [cyan]{closest_match}[/].")
+                    else:
+                        resolved_parts.append("")
         else:
             resolved_parts.append(part)
     return resolved_parts
 
-def check_cookbook_for_similar(command_to_check: list[str]) -> list[str] | None:
-    """
-    Reads cookbook.md and finds if a similar, known-good command exists.
-    """
-    if not COOKBOOK_PATH.exists():
-        return None
-    try:
-        content = COOKBOOK_PATH.read_text()
-        code_blocks = re.findall(r"```bash\n(.*?)\n```", content, re.DOTALL)
-        known_commands = [cmd.strip() for cmd in code_blocks]
-        command_str_to_check = " ".join(command_to_check)
-        matches = difflib.get_close_matches(command_str_to_check, known_commands, n=1, cutoff=0.8)
-        if matches:
-            return shlex.split(matches[0])
-        return None
-    except Exception as e:
-        console.print(f"[yellow]Warning: Could not parse cookbook.md: {e}[/]")
-        return None
+def preflight_file_check(command_parts: list[str]) -> bool:
+    for i, part in enumerate(command_parts):
+        if part in FILE_PATH_FLAGS:
+            if i + 1 < len(command_parts):
+                file_path_str = command_parts[i + 1]
+                if not file_path_str or file_path_str.isspace():
+                    console.print(f"[bold red]Pre-flight Error:[/] Missing value for file path argument '{part}'.")
+                    return False
+                if file_path_str.startswith('file://'):
+                    file_path_str = file_path_str[7:]
+                expanded_path = Path(file_path_str).expanduser()
+                if not expanded_path.is_file():
+                    console.print(f"[bold red]Pre-flight Error:[/] The file specified for '{part}' does not exist at the resolved path: '[cyan]{expanded_path}[/]'")
+                    return False
+    return True
 
-def run_and_learn(command: list[str], ci_mode: bool, redact_mode: bool):
-    """
-    Executes a command, captures its output, and if it fails,
-    starts an interactive troubleshooting session (unless in CI mode).
-    """
-    original_command_str = ' '.join(command)
-    console.print(f"▶️  Running: [cyan]{original_command_str}[/]")
-
-    while True:
-        result = subprocess.run(command, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            output = redact_all_pii(result.stdout) if redact_mode else result.stdout
-            console.print("[bold green]✅ Success![/]")
-            print(output)
-
-            # If the command succeeded after a failure, ask to save it.
-            if ' '.join(command) != original_command_str:
-                if not ci_mode and typer.confirm("\n[bold yellow]✨ This corrected command worked. Save it to your cookbook?[/]"):
-                    with open(COOKBOOK_PATH, "a") as f:
-                        f.write(f"## Corrected Command\n\n")
-                        f.write("**Successfully Executed:**\n")
-                        f.write("```bash\n")
-                        f.write(' '.join(command) + "\n")
-                        f.write("```\n\n")
-                    console.print(f"✅ Saved to [green]{COOKBOOK_PATH}[/]")
-            break
-
-        # --- FAILURE PATH ---
-        stderr_output = redact_all_pii(result.stderr.strip()) if redact_mode else result.stderr.strip()
-        
-        if ci_mode:
-            console.print(f"[bold red]❌ Command Failed in CI Mode (Exit Code: {result.returncode})[/]", file=sys.stderr)
-            console.print(f"--- Error ---", file=sys.stderr)
-            console.print(stderr_output, file=sys.stderr)
-            raise typer.Exit(result.returncode)
-        
-        # --- INTERACTIVE TROUBLESHOOTING ---
-        console.print(Rule("[bold red]❌ Command Failed[/]", style="red"))
-        console.print("[yellow]--- OCI Error ---[/]")
-        console.print(stderr_output)
-        console.print("[yellow]-----------------[/]")
-        
-        failing_command_str = redact_all_pii(' '.join(command)) if redact_mode else ' '.join(command)
-        console.print(f"The failing command was: [cyan]{failing_command_str}[/]")
-
-        new_command_str = typer.prompt("\nEnter the corrected command, or type 'q' to quit")
-        if new_command_str.lower() in ['q', 'quit']:
-            console.print("[bold]Aborting session.[/]")
-            break
-        
-        command = shlex.split(new_command_str)
+def redact_output(output: str) -> str:
+    ocid_pattern = r"ocid1\.[a-z0-9\.]+\.[a-z0-9]+\.[a-z0-9]+\.[a-z0-9]+\.[a-f0-9]{30,}"
+    ip_pattern = r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"
+    redacted_output = re.sub(ocid_pattern, "[REDACTED_OCID]", output, flags=re.IGNORECASE)
+    redacted_output = re.sub(ip_pattern, "[REDACTED_IP]", redacted_output)
+    return redacted_output
 
 # --- CLI APPLICATION ---
 app = typer.Typer(
-    help="MyOCI: Your intelligent partner for the OCI CLI.",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
+    help="MyOCI: Your personal architect for the OCI CLI."
 )
-
+# ... (run command is unchanged) ...
 @app.command("run")
-def run_raw_command(
-    ctx: typer.Context,
-    ci: bool = typer.Option(False, "--ci", help="Enable non-interactive CI/AI mode."),
-    redact: bool = typer.Option(True, "--redact/--no-redact", help="Enable/disable PII redaction in output.")
+def run_command(
+    oci_command: list[str] = typer.Argument(..., help="The raw OCI command and its arguments to be executed.", metavar="OCI_COMMAND_STRING..."),
+    ci: bool = typer.Option(False, "--ci", help="Enable non-interactive (CI) mode. Fails on ambiguity."),
+    redact: bool = typer.Option(True, "--redact/--no-redact", help="Toggle PII redaction on output.")
 ):
-    """
-    Validates and executes a raw OCI command string.
-    Safe by default (interactive, redacted).
-    Use --ci for machine execution.
-    Use --no-redact for raw data output.
-    """
-    raw_command_parts = ctx.args
-    if not raw_command_parts:
-        console.print("[bold red]Error:[/] Please provide the raw OCI command to run after 'run'.")
-        raise typer.Exit(1)
-
+    raw_command_parts = oci_command
     console.rule("[bold cyan]MyOCI Validator Session Started[/]", style="cyan")
-    
-    # --- STEP 0: Pre-flight Syntax Check ---
-    console.print("[0/4] ✈️  [bold]Running pre-flight syntax check...[/bold]")
-    corrected_by_preflight = preflight_syntax_check(raw_command_parts)
-    if not corrected_by_preflight:
-        # This would happen if the user rejects a suggestion
-        console.rule("[bold red]Session Aborted[/]", style="red")
-        raise typer.Exit(1)
-    console.print("[green]✅ Pre-flight check complete.[/green]\n")
-      
-    # Step 1: Variable Resolution    
     console.print("[1/4] 🔍 [bold]Resolving environment variables...[/bold]")
-    resolved_command = resolve_variables(corrected_by_preflight, ci_mode=ci)
-
-    if not resolved_command:
-        console.rule("[bold red]Session Aborted[/]", style="red")
+    resolved_command = resolve_variables(raw_command_parts, ci)
+    if resolved_command is None:
+        console.rule("[bold red]Session Aborted due to variable resolution failure.[/]", style="red")
         raise typer.Exit(1)
-    console.print("[green]✅ Variables resolved successfully.[/green]\n")
-
-    # Step 2: Cookbook Check
-    final_command = resolved_command
-    if not ci:
-        console.print("[2/3] 📖 [bold]Checking cookbook for known-good commands...[/bold]")
-        similar_command = check_cookbook_for_similar(resolved_command)
-        if similar_command:
-            console.print("💡 [yellow]Heads up![/] A very similar command was found in your cookbook:")
-            console.print(f"   [cyan]{' '.join(similar_command)}[/]")
-            if typer.confirm("Do you want to run this known-good version instead?"):
-                final_command = similar_command
-                console.print("[green]✅ Switched to known-good command.[/green]\n")
-            else:
-                console.print("👍 Continuing with the original command.\n")
+    console.print("[green]✅ Variables resolved.[/green]\n")
+    console.print("[2/4] 📄 [bold]Running pre-flight file path check...[/bold]")
+    if not preflight_file_check(resolved_command):
+        console.rule("[bold red]Session Aborted due to missing file.[/]", style="red")
+        raise typer.Exit(1)
+    console.print("[green]✅ File paths are valid.[/green]\n")
+    console.print("[3/4] 📝 [bold]Validating command against schema...[/bold]")
+    if not validate_command_with_schema(resolved_command):
+        console.rule("[bold red]Session Aborted due to validation failure.[/]", style="red")
+        raise typer.Exit(1)
+    console.print("[green]✅ Validation successful.[/green]\n")
+    console.print("[4/4] ▶️  [bold]Executing command...[/bold]")
+    try:
+        result = subprocess.run(resolved_command, capture_output=True, text=True, check=False)
+        stdout_output = result.stdout
+        stderr_output = result.stderr
+        if redact:
+            stdout_output = redact_output(stdout_output)
+            stderr_output = redact_output(stderr_output)
+        if result.returncode == 0:
+            console.print("[bold green]✅ Command Succeeded![/]")
+            if stdout_output: print(stdout_output)
         else:
-            console.print("✅ No similar commands found. Proceeding.\n")
-
-    # Step 3: Execution and Learning
-    console.print("[3/3] ▶️  [bold]Executing command...[/bold]")
-    run_and_learn(final_command, ci_mode=ci, redact_mode=redact)
-
+            console.print("[bold red]❌ Command Failed![/]")
+            error_message = (stderr_output.strip() + "\n" + stdout_output.strip()).strip()
+            if error_message: console.print(error_message)
+            else: console.print("[red]No error output from OCI CLI.[/red]")
+    except FileNotFoundError:
+        console.print("[bold red]Error:[/] 'oci' command not found. Is the OCI CLI installed and in your PATH?")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[bold red]An unexpected error occurred during command execution:[/]\n{e}")
+        raise typer.Exit(1)
+    
     console.rule("[bold cyan]Validator Session Ended[/]", style="cyan")
+    if result.returncode != 0:
+        raise typer.Exit(result.returncode)
+
+# --- LEARN COMMAND (UNCHANGED, BUT WITH A NEW HINT) ---
+@app.command("learn")
+def learn_command(
+    oci_command: list[str] = typer.Argument(..., help="A successful OCI command to learn from.", metavar="OCI_COMMAND_STRING...")
+):
+    command_to_learn = oci_command
+    # ... (code for running and verifying the command is the same) ...
+    console.print("🎓 [bold]Learning Mode:[/bold] I will run this command to verify it succeeds.")
+    resolved_command_for_learn = resolve_variables(command_to_learn, ci_mode=False)
+    if resolved_command_for_learn is None:
+        console.print("[bold red]Error:[/] Variable resolution failed for the command to learn. Aborting.")
+        raise typer.Exit(1)
+    result = subprocess.run(resolved_command_for_learn, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        console.print("[bold red]Error:[/] The provided command failed to execute. I can only learn from successful commands.")
+        error_message = (result.stderr.strip() + "\n" + result.stdout.strip()).strip()
+        console.print(error_message)
+        raise typer.Exit(1)
+    console.print("[green]✅ Command execution was successful. Now, let's build the template.[/green]")
+    command_base = [p for p in resolved_command_for_learn if not p.startswith('--')][:4]
+    if not command_base:
+        console.print("[bold red]Error:[/] Could not determine base command for learning.")
+        raise typer.Exit(1)
+    command_key = "_".join(command_base).replace(" ", "_")
+    schema_path = TEMPLATES_DIR / f"{command_key}.yaml"
+    schema = {'command': ' '.join(command_base), 'required_args': [], 'arg_schemas': {}}
+    parsed_args = parse_cli_args(resolved_command_for_learn)
+    console.print("\n[bold yellow]--- Interactive Schema Builder ---[/bold yellow]")
+    console.print("I will go through the arguments of your successful command.")
+    for flag, value in parsed_args.items():
+        console.print(f"\nProcessing flag: [cyan]{flag}[/]")
+        if typer.confirm(f"Should '[cyan]{flag}[/]' be a [bold]required[/bold] argument for this command?"):
+            schema['required_args'].append(flag)
+        if value and (value.strip().startswith('{') or value.strip().startswith('[') or value.startswith('file://')):
+            if typer.confirm(f"The value for '[cyan]{flag}[/]' looks like JSON/file. Should I create a validation schema for its structure?"):
+                try:
+                    json_data = load_json_from_value(value)
+                    if isinstance(json_data, dict):
+                        schema['arg_schemas'][flag] = {'type': 'object'}
+                    elif isinstance(json_data, list):
+                        schema['arg_schemas'][flag] = {'type': 'array'}
+                    else: continue
+                    console.print(f"Added a basic [bold]{schema['arg_schemas'][flag]['type']}[/bold] schema for [cyan]{flag}[/].")
+                except Exception as e:
+                    console.print(f"[bold red]Error:[/] Could not parse value for '{flag}' to infer schema: {e}")
+    with open(schema_path, 'w') as f:
+        yaml.dump(schema, f, sort_keys=False)
+    
+    console.print(f"\n[bold green]✅ Success![/] New validation template saved to: [cyan]{schema_path}[/cyan]")
+    # --- NEW HINT ---
+    console.print(f"✨ [bold]Pro Tip:[/] You can make this template even more powerful by manually editing it to use common schemas. For example, for '--compartment-id', you can add: [yellow]$ref: \"common_oci_args.compartment_id\"[/yellow]")
+
 
 if __name__ == "__main__":
     app()

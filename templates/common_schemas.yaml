@@ -1,0 +1,11 @@
+
+common_oci_args:
+  compartment_id:
+    type: string
+    pattern: "^ocid1\\.compartment\\.oc1\\..*$"
+    description: "Must be a valid Compartment OCID (starts with 'ocid1.compartment...'), not a Tenancy OCID."
+  
+  tenancy_id:
+    type: string
+    pattern: "^ocid1\\.tenancy\\.oc1\\..*$"
+    description: "Must be a valid Tenancy OCID (starts with 'ocid1.tenancy...')."

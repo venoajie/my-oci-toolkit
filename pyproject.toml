@@ -1,5 +1,5 @@
 [project]
-name = "myoci-toolkit"
+name = "my-oci-toolkit"
 version = "1.0.0"
 description = "A personal, intelligent wrapper for the OCI CLI."
 authors = [{ name = "Veno Ajie", email = "ven.ajie@protonmail.com" }]
@@ -9,6 +9,8 @@ dependencies = [
     "python-dotenv",
     "rich",
     "rapidfuzz",
+    "PyYAML",  
+    "jsonschema", 
 ]
 
 [project.scripts]
