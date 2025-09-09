@@ -5,6 +5,7 @@ import typer
 import re
 import json
 import yaml
+import shlex
 from pathlib import Path
 from dotenv import load_dotenv
 from rich.console import Console
@@ -32,8 +33,7 @@ if COMMON_SCHEMAS_PATH.is_file():
         COMMON_SCHEMAS = yaml.safe_load(f)
         console.print(f"✅ Loaded common schemas from [cyan]{COMMON_SCHEMAS_PATH.name}[/cyan]")
 
-# --- CORE VALIDATION LOGIC ---
-
+# ... (All other functions remain the same) ...
 def resolve_schema_ref(ref_path: str) -> dict | None:
     keys = ref_path.split('.')
     current_level = COMMON_SCHEMAS
@@ -133,7 +133,6 @@ def validate_command_with_schema(command_parts: list[str]) -> bool:
     console.print("[green]✅ Command passed all structural and format validation checks.[/green]")
     return True
 
-# --- HELPER FUNCTIONS ---
 def resolve_variables(command_parts: list[str], ci_mode: bool) -> list[str] | None:
     """Resolves $VAR, handles potential quotes, and expands tilde (~) in paths."""
     resolved_parts = []
@@ -174,8 +173,7 @@ def preflight_file_check(command_parts: list[str]) -> bool:
                 if not file_path_str or file_path_str.isspace():
                     console.print(f"[bold red]Pre-flight Error:[/] Missing value for file path argument '{part}'.")
                     return False
-                # No need for file:// check here, as it's a direct path now
-                expanded_path = Path(file_path_str).expanduser() # expanduser is safe to call twice
+                expanded_path = Path(file_path_str).expanduser()
                 if not expanded_path.is_file():
                     console.print(f"[bold red]Pre-flight Error:[/] The file specified for '{part}' does not exist at the resolved path: '[cyan]{expanded_path}[/]'")
                     return False
@@ -192,6 +190,7 @@ def redact_output(output: str) -> str:
 app = typer.Typer(
     help="MyOCI: Your personal architect for the OCI CLI."
 )
+
 @app.command("run")
 def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI command and its arguments to be executed.", metavar="OCI_COMMAND_STRING..."), ci: bool = typer.Option(False, "--ci", help="Enable non-interactive (CI) mode. Fails on ambiguity."), redact: bool = typer.Option(True, "--redact/--no-redact", help="Toggle PII redaction on output.")):
     raw_command_parts = oci_command
@@ -225,10 +224,16 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
             if stdout_output:
                 print(stdout_output)
         else:
+            # --- START OF THE FIX ---
             console.print("[bold red]❌ Command Failed![/]")
+            human_readable_command = shlex.join(resolved_command)
+            console.print(f"[bold yellow]🔎 Final command executed:[/bold yellow]\n[cyan]{human_readable_command}[/cyan]\n")
             error_message = (stderr_output.strip() + "\n" + stdout_output.strip()).strip()
-            if error_message: console.print(error_message)
-            else: console.print("[red]No error output from OCI CLI.[/red]")
+            if error_message:
+                console.print(error_message)
+            else:
+                console.print("[red]No error output from OCI CLI.[/red]")
+            # --- END OF THE FIX ---
     except FileNotFoundError:
         console.print("[bold red]Error:[/] 'oci' command not found. Is the OCI CLI installed in your PATH?")
         raise typer.Exit(1)
@@ -240,6 +245,7 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
     if result.returncode != 0:
         raise typer.Exit(result.returncode)
 
+# ... (learn command is unchanged) ...
 @app.command("learn")
 def learn_command(oci_command: list[str] = typer.Argument(..., help="A successful OCI command to learn from.", metavar="OCI_COMMAND_STRING...")):
     command_to_learn = oci_command
@@ -248,7 +254,7 @@ def learn_command(oci_command: list[str] = typer.Argument(..., help="A successfu
     if resolved_command_for_learn is None:
         console.print("[bold red]Error:[/] Variable resolution failed for the command to learn. Aborting.")
         raise typer.Exit(1)
-    result = subprocess.run(resolved_command_for_learn, capture_output=True, text=T, check=False)
+    result = subprocess.run(resolved_command_for_learn, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         console.print("[bold red]Error:[/] The provided command failed to execute. I can only learn from successful commands.")
         error_message = (result.stderr.strip() + "\n" + result.stdout.strip()).strip()
