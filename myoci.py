@@ -1,3 +1,4 @@
+
 import os
 import sys
 import subprocess
@@ -33,7 +34,8 @@ if COMMON_SCHEMAS_PATH.is_file():
         COMMON_SCHEMAS = yaml.safe_load(f)
         console.print(f"✅ Loaded common schemas from [cyan]{COMMON_SCHEMAS_PATH.name}[/cyan]")
 
-# ... (All other functions remain the same) ...
+# --- CORE VALIDATION LOGIC ---
+
 def resolve_schema_ref(ref_path: str) -> dict | None:
     keys = ref_path.split('.')
     current_level = COMMON_SCHEMAS
@@ -81,12 +83,14 @@ def load_json_from_value(value: str) -> any:
     else:
         return json.loads(value)
 
-def validate_command_with_schema(command_parts: list[str]) -> bool:
+# --- MODIFIED: This function now returns True, False, or None ---
+def validate_command_with_schema(command_parts: list[str]) -> bool | None:
+    """The main validation engine. Checks a command against its schema."""
     command_base = [p for p in command_parts if not p.startswith('--')][:4]
     schema = find_schema_for_command(command_base)
     if not schema:
         console.print("[yellow]Info: No validation schema found for this command. Proceeding without deep validation.[/yellow]")
-        return True
+        return None # <-- NEW: Return None for skipped validation
 
     console.print(f"✅ Found validation schema: [cyan]{schema['command']}[/cyan]")
     parsed_args = parse_cli_args(command_parts)
@@ -133,6 +137,7 @@ def validate_command_with_schema(command_parts: list[str]) -> bool:
     console.print("[green]✅ Command passed all structural and format validation checks.[/green]")
     return True
 
+# --- HELPER FUNCTIONS ---
 def resolve_variables(command_parts: list[str], ci_mode: bool) -> list[str] | None:
     """Resolves $VAR, handles potential quotes, and expands tilde (~) in paths."""
     resolved_parts = []
