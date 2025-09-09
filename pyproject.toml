@@ -1,6 +1,6 @@
 [project]
 name = "my-oci-toolkit"
-version = "1.0.0"
+version = "1.0.1"
 description = "A personal, intelligent wrapper for the OCI CLI."
 authors = [{ name = "Veno Ajie", email = "ven.ajie@protonmail.com" }]
 requires-python = ">=3.8"
@@ -12,6 +12,7 @@ dependencies = [
     "PyYAML",  
     "jsonschema", 
 ]
+
 
 [project.scripts]
 myoci = "myoci:app"
