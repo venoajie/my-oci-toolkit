@@ -33,8 +33,7 @@ if COMMON_SCHEMAS_PATH.is_file():
         COMMON_SCHEMAS = yaml.safe_load(f)
         console.print(f"✅ Loaded common schemas from [cyan]{COMMON_SCHEMAS_PATH.name}[/cyan]")
 
-# --- CORE VALIDATION LOGIC ---
-
+# ... (All other functions are unchanged) ...
 def resolve_schema_ref(ref_path: str) -> dict | None:
     keys = ref_path.split('.')
     current_level = COMMON_SCHEMAS
@@ -82,86 +81,76 @@ def load_json_from_value(value: str) -> any:
     else:
         return json.loads(value)
 
-# --- MODIFIED: This function now returns True, False, or None ---
 def validate_command_with_schema(command_parts: list[str]) -> bool | None:
-    """The main validation engine. Checks a command against its schema."""
     command_base = [p for p in command_parts if not p.startswith('--')][:4]
     schema = find_schema_for_command(command_base)
     if not schema:
         console.print("[yellow]Info: No validation schema found for this command. Proceeding without deep validation.[/yellow]")
-        return None # <-- Return None for skipped validation
-
+        return None
     console.print(f"✅ Found validation schema: [cyan]{schema['command']}[/cyan]")
     parsed_args = parse_cli_args(command_parts)
-
     for required in schema.get('required_args', []):
         if required not in parsed_args:
             console.print(f"[bold red]Validation Error:[/] Missing required argument: {required}")
             return False
-
     for arg_name, arg_schema in schema.get('arg_schemas', {}).items():
         if arg_name in parsed_args:
             value = parsed_args[arg_name]
-            
             if '$ref' in arg_schema:
                 resolved_schema = resolve_schema_ref(arg_schema['$ref'])
-                if not resolved_schema:
-                    console.print(f"[yellow]Warning: Could not resolve schema reference '{arg_schema['$ref']}' for '{arg_name}'. Skipping validation.[/yellow]")
-                    continue
+                if not resolved_schema: continue
                 arg_schema = resolved_schema
-
             if value is None and arg_schema.get('type') != 'boolean':
                 console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] Expected a value, but none was provided.")
                 return False
-
             try:
-                if arg_schema.get('type') in ['object', 'array']:
-                    instance = load_json_from_value(value)
-                    validate(instance=instance, schema=arg_schema)
-                else:
-                    instance = value
-                    validate(instance=instance, schema=arg_schema)
+                instance = load_json_from_value(value) if arg_schema.get('type') in ['object', 'array'] else value
+                validate(instance=instance, schema=arg_schema)
             except ValidationError as e:
-                if 'pattern' in arg_schema and 'does not match' in e.message:
-                    console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] Value does not match the required format.")
-                    if arg_schema.get('description'):
-                        console.print(f"  [bold cyan]Hint:[/] {arg_schema['description']}")
-                else:
-                    console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] {e.message}")
+                console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] {e.message}")
+                if 'pattern' in arg_schema and arg_schema.get('description'): console.print(f"  [bold cyan]Hint:[/] {arg_schema['description']}")
                 return False
             except Exception as e:
                 console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] {e}")
                 return False
-    
     console.print("[green]✅ Command passed all structural and format validation checks.[/green]")
     return True
 
 # --- HELPER FUNCTIONS ---
+# --- MODIFIED: Restored rapidfuzz logic ---
 def resolve_variables(command_parts: list[str], ci_mode: bool) -> list[str] | None:
-    """Resolves $VAR, handles potential quotes, and expands tilde (~) in paths."""
+    """Resolves $VAR, handles potential quotes, expands tilde, and suggests corrections."""
     resolved_parts = []
     available_vars = {**os.environ}
     
     for part in command_parts:
         clean_part = part.strip("'\"") 
-        
         if clean_part.startswith('$'):
             var_name = clean_part.strip('${}')
             if var_name in available_vars:
                 value_from_env = available_vars[var_name]
-                expanded_value = str(Path(value_from_env).expanduser())
-                resolved_parts.append(expanded_value)
+                try:
+                    json.loads(value_from_env)
+                    resolved_parts.append(value_from_env)
+                except json.JSONDecodeError:
+                    expanded_value = str(Path(value_from_env).expanduser())
+                    resolved_parts.append(expanded_value)
             else:
                 if ci_mode:
                     console.print(f"[bold red]Error:[/] Environment variable '{var_name}' not found in CI mode.")
                     return None
                 else:
                     console.print(f"[yellow]Warning:[/] Environment variable '[bold]{var_name}[/]' not found.")
-                    closest_match, score = process.extractOne(var_name, available_vars.keys(), scorer=fuzz.ratio)
+                    # --- RAPIDFUZZ LOGIC RESTORED HERE ---
+                    closest_match, score, _ = process.extractOne(var_name, available_vars.keys(), scorer=fuzz.ratio)
                     if score > 70 and typer.confirm(f"Did you mean '[cyan]{closest_match}[/]'?"):
                         value_from_env = available_vars[closest_match]
-                        expanded_value = str(Path(value_from_env).expanduser())
-                        resolved_parts.append(expanded_value)
+                        try:
+                            json.loads(value_from_env)
+                            resolved_parts.append(value_from_env)
+                        except json.JSONDecodeError:
+                            expanded_value = str(Path(value_from_env).expanduser())
+                            resolved_parts.append(expanded_value)
                         console.print(f"Using value for [cyan]{closest_match}[/].")
                     else:
                         resolved_parts.append("")
@@ -174,17 +163,13 @@ def preflight_file_check(command_parts: list[str]) -> bool:
         if part in FILE_PATH_FLAGS:
             if i + 1 < len(command_parts):
                 file_path_str = command_parts[i + 1]
-                if not file_path_str or file_path_str.isspace():
-                    console.print(f"[bold red]Pre-flight Error:[/] Missing value for file path argument '{part}'.")
-                    return False
-                expanded_path = Path(file_path_str).expanduser()
-                if not expanded_path.is_file():
-                    console.print(f"[bold red]Pre-flight Error:[/] The file specified for '{part}' does not exist at the resolved path: '[cyan]{expanded_path}[/]'")
+                if not Path(file_path_str).is_file():
+                    console.print(f"[bold red]Pre-flight Error:[/] The file specified for '{part}' does not exist at the resolved path: '[cyan]{file_path_str}[/]'")
                     return False
     return True
 
 def redact_output(output: str) -> str:
-    ocid_pattern = r"ocid1\.[a-z0-9\.]+\.[a-z0-9]+\.[a-z0-9]+\.[a-z0-9]+\.[a-f0-9]{30,}"
+    ocid_pattern = r"ocid1\.[a-z0-9\.]+\.[a-z0-9\.]*?\.\.[a-zA-Z0-9]+"
     ip_pattern = r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"
     redacted_output = re.sub(ocid_pattern, "[REDACTED_OCID]", output, flags=re.IGNORECASE)
     redacted_output = re.sub(ip_pattern, "[REDACTED_IP]", redacted_output)
@@ -211,16 +196,15 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
         raise typer.Exit(1)
     console.print("[green]✅ File paths are valid.[/green]\n")
     
-    # --- MODIFIED: Smart validation flow ---
     console.print("[3/4] 📝 [bold]Validating command against schema...[/bold]")
     validation_result = validate_command_with_schema(resolved_command)
-    if validation_result is False: # Explicitly check for failure
+    if validation_result is False:
         console.rule("[bold red]Session Aborted due to validation failure.[/]", style="red")
         raise typer.Exit(1)
-    if validation_result is True: # Only print success if it actually passed
+    if validation_result is True:
         console.print("[green]✅ Validation successful.[/green]\n")
-    else: # This handles the 'None' case
-        console.print("") # Just add a newline for spacing
+    else:
+        console.print("")
 
     console.print("[4/4] ▶️  [bold]Executing command...[/bold]")
     try:
@@ -228,31 +212,20 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
         stdout_output = result.stdout
         stderr_output = result.stderr
         
-        # Redact before printing anything
-        if redact:
-            stdout_output = redact_output(stdout_output)
-            stderr_output = redact_output(stderr_output)
-            
         if result.returncode == 0:
+            if redact: stdout_output = redact_output(stdout_output)
             console.print("[bold green]✅ Command Succeeded![/]")
-            if stdout_output:
-                print(stdout_output)
+            if stdout_output: print(stdout_output)
         else:
-            console.print("[bold red]❌ Command Failed![/]")
             human_readable_command = shlex.join(resolved_command)
-            # --- MODIFIED: Redact the debug command string ---
             if redact:
                 human_readable_command = redact_output(human_readable_command)
+                stdout_output = redact_output(stdout_output)
+                stderr_output = redact_output(stderr_output)
+            console.print("[bold red]❌ Command Failed![/]")
             console.print(f"[bold yellow]🔎 Final command executed:[/bold yellow]\n[cyan]{human_readable_command}[/cyan]\n")
-            
             error_message = (stderr_output.strip() + "\n" + stdout_output.strip()).strip()
-            if error_message:
-                console.print(error_message)
-            else:
-                console.print("[red]No error output from OCI CLI.[/red]")
-    except FileNotFoundError:
-        console.print("[bold red]Error:[/] 'oci' command not found. Is the OCI CLI installed in your PATH?")
-        raise typer.Exit(1)
+            if error_message: console.print(error_message)
     except Exception as e:
         console.print(f"[bold red]An unexpected error occurred during command execution:[/]\n{e}")
         raise typer.Exit(1)
@@ -261,11 +234,10 @@ def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI c
     if result.returncode != 0:
         raise typer.Exit(result.returncode)
 
-# ... (learn command is unchanged) ...
+# learn command is unchanged
 @app.command("learn")
 def learn_command(oci_command: list[str] = typer.Argument(..., help="A successful OCI command to learn from.", metavar="OCI_COMMAND_STRING...")):
     command_to_learn = oci_command
-    # ... (rest of the learn function is the same) ...
     console.print("🎓 [bold]Learning Mode:[/bold] I will run this command to verify it succeeds.")
     resolved_command_for_learn = resolve_variables(command_to_learn, ci_mode=False)
     if resolved_command_for_learn is None:

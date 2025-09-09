@@ -1,3 +1,5 @@
+# This file contains reusable validation schemas for common OCI arguments.
+# It is the single source of truth for data formats.
 
 common_oci_args:
   compartment_id:
@@ -9,3 +11,34 @@ common_oci_args:
     type: string
     pattern: "^ocid1\\.tenancy\\.oc1\\..*$"
     description: "Must be a valid Tenancy OCID (starts with 'ocid1.tenancy...')."
+
+  subnet_id:
+    type: string
+    pattern: "^ocid1\\.subnet\\.oc1\\..*$"
+    description: "Must be a valid Subnet OCID (starts with 'ocid1.subnet...')."
+
+  vcn_id:
+    type: string
+    pattern: "^ocid1\\.vcn\\.oc1\\..*$"
+    description: "Must be a valid VCN OCID (starts with 'ocid1.vcn...')."
+
+  image_id:
+    type: string
+    pattern: "^ocid1\\.image\\.oc1\\..*$"
+    description: "Must be a valid Image OCID (starts with 'ocid1.image...')."
+
+  availability_domain:
+    type: string
+    pattern: "^[A-Za-z0-9]+:[A-Z]{2,}-[A-Z_]+-[0-9]-[A-Z_]-[0-9]$"
+    description: "Must be a valid Availability Domain name (e.g., Uocm:EU-FRANKFURT-1-AD-1)."
+
+  shape_config_json:
+    type: object
+    description: "Must be a valid JSON object defining OCPUs and memory (e.g., {\"ocpus\": 1, \"memoryInGBs\": 6})."
+    required: ["ocpus", "memoryInGBs"]
+    properties:
+      ocpus:
+        type: number
+      memoryInGBs:
+        type: number
+

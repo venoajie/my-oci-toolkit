@@ -1,7 +1,30 @@
+# templates/oci_compute_instance_launch.yaml
+command: oci compute instance launch
 
-command: oci compute instance list
+# Principle 1: Completeness - List ALL logically required args.
 required_args:
+- --display-name
 - --compartment-id
+- --availability-domain
+- --shape
+- --subnet-id
+- --image-id
+- --ssh-authorized-keys-file
+
+# Principle 2 & 3: Specificity and Reusability - Use types and $refs.
 arg_schemas:
   --compartment-id:
     $ref: "common_oci_args.compartment_id"
+  
+  --availability-domain:
+    $ref: "common_oci_args.availability_domain"
+
+  --subnet-id:
+    $ref: "common_oci_args.subnet_id"
+
+  --image-id:
+    $ref: "common_oci_args.image_id"
+
+  # For flex shapes, this is also logically required.
+  --shape-config:
+    $ref: "common_oci_args.shape_config_json"
