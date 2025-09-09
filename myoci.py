@@ -9,6 +9,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.rule import Rule
+from rapidfuzz import process, fuzz
+
+# A simple in-memory cache for command flags
+FLAG_CACHE = {}
 
 # --- SETUP & CONFIGURATION ---
 console = Console()
@@ -24,6 +28,55 @@ COOKBOOK_PATH = SCRIPT_DIR / "cookbook.md"
 load_dotenv(dotenv_path=DOTENV_PATH)
 
 # --- HELPER FUNCTIONS ---
+
+def get_valid_flags_for_command(command_parts: list[str]) -> list[str]:
+    """
+    Runs the --help command for a given OCI command path and caches the valid flags.
+    """
+    command_key = " ".join(command_parts)
+    if command_key in FLAG_CACHE:
+        return FLAG_CACHE[command_key]
+
+    try:
+        help_command = command_parts + ["--help"]
+        result = subprocess.run(help_command, capture_output=True, text=True, check=True)
+        # Use regex to find all lines starting with --option
+        valid_flags = re.findall(r"^\s+(--[a-zA-Z0-9-]+)", result.stdout, re.MULTILINE)
+        FLAG_CACHE[command_key] = valid_flags
+        return valid_flags
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # If we can't get help, we can't check. Return empty list.
+        return []
+
+def preflight_syntax_check(command_parts: list[str]) -> list[str] | None:
+    """
+    Checks for flag typos using Levenshtein distance before execution.
+    """
+    # Find the command path (e.g., ['oci', 'compute', 'instance', 'list'])
+    command_path = []
+    for part in command_parts:
+        if part.startswith('--'):
+            break
+        command_path.append(part)
+    
+    valid_flags = get_valid_flags_for_command(command_path)
+    if not valid_flags:
+        return command_parts # Cannot check, proceed as is
+
+    corrected_parts = []
+    for part in command_parts:
+        if part.startswith('--') and "=" not in part: # Check simple flags like --compartment-id
+            if part not in valid_flags:
+                # Find the best match with a high score threshold
+                best_match = process.extractOne(part, valid_flags, scorer=fuzz.WRatio, score_cutoff=80)
+                if best_match:
+                    suggestion = best_match[0]
+                    if typer.confirm(f"⚠️ Syntax Warning: Invalid flag [yellow]'{part}'[/]. Did you mean [green]'{suggestion}'[/]?"):
+                        corrected_parts.append(suggestion)
+                        continue
+        corrected_parts.append(part)
+    
+    return corrected_parts
 
 def redact_all_pii(text: str) -> str:
     """Redacts OCIDs and IPv4 addresses from a string."""
@@ -166,9 +219,19 @@ def run_raw_command(
 
     console.rule("[bold cyan]MyOCI Validator Session Started[/]", style="cyan")
     
-    # Step 1: Variable Resolution
-    console.print("[1/3] 🔍 [bold]Resolving environment variables...[/bold]")
-    resolved_command = resolve_variables(raw_command_parts, ci_mode=ci)
+    # --- STEP 0: Pre-flight Syntax Check ---
+    console.print("[0/4] ✈️  [bold]Running pre-flight syntax check...[/bold]")
+    corrected_by_preflight = preflight_syntax_check(raw_command_parts)
+    if not corrected_by_preflight:
+        # This would happen if the user rejects a suggestion
+        console.rule("[bold red]Session Aborted[/]", style="red")
+        raise typer.Exit(1)
+    console.print("[green]✅ Pre-flight check complete.[/green]\n")
+      
+    # Step 1: Variable Resolution    
+    console.print("[1/4] 🔍 [bold]Resolving environment variables...[/bold]")
+    resolved_command = resolve_variables(corrected_by_preflight, ci_mode=ci)
+
     if not resolved_command:
         console.rule("[bold red]Session Aborted[/]", style="red")
         raise typer.Exit(1)
