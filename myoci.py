@@ -25,7 +25,6 @@ load_dotenv(dotenv_path=DOTENV_PATH)
 
 FILE_PATH_FLAGS = ["--ssh-authorized-keys-file", "--file", "--from-json", "--actions"]
 
-# --- NEW: LOAD COMMON SCHEMAS ON STARTUP ---
 COMMON_SCHEMAS_PATH = TEMPLATES_DIR / "common_schemas.yaml"
 COMMON_SCHEMAS = {}
 if COMMON_SCHEMAS_PATH.is_file():
@@ -36,14 +35,13 @@ if COMMON_SCHEMAS_PATH.is_file():
 # --- CORE VALIDATION LOGIC ---
 
 def resolve_schema_ref(ref_path: str) -> dict | None:
-    """Finds a schema in COMMON_SCHEMAS from a path like 'group.schema_name'."""
     keys = ref_path.split('.')
     current_level = COMMON_SCHEMAS
     for key in keys:
         if isinstance(current_level, dict) and key in current_level:
             current_level = current_level[key]
         else:
-            return None # Path not found
+            return None
     return current_level
 
 def find_schema_for_command(command_parts: list[str]) -> dict | None:
@@ -84,7 +82,6 @@ def load_json_from_value(value: str) -> any:
         return json.loads(value)
 
 def validate_command_with_schema(command_parts: list[str]) -> bool:
-    """The main validation engine. Checks a command against its schema."""
     command_base = [p for p in command_parts if not p.startswith('--')][:4]
     schema = find_schema_for_command(command_base)
     if not schema:
@@ -99,12 +96,10 @@ def validate_command_with_schema(command_parts: list[str]) -> bool:
             console.print(f"[bold red]Validation Error:[/] Missing required argument: {required}")
             return False
 
-    # UPGRADED: This loop now handles simple and complex validation
     for arg_name, arg_schema in schema.get('arg_schemas', {}).items():
         if arg_name in parsed_args:
             value = parsed_args[arg_name]
             
-            # --- NEW: Resolve $ref if it exists ---
             if '$ref' in arg_schema:
                 resolved_schema = resolve_schema_ref(arg_schema['$ref'])
                 if not resolved_schema:
@@ -112,23 +107,18 @@ def validate_command_with_schema(command_parts: list[str]) -> bool:
                     continue
                 arg_schema = resolved_schema
 
-            # Check for missing value
             if value is None and arg_schema.get('type') != 'boolean':
                 console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] Expected a value, but none was provided.")
                 return False
 
             try:
-                # Validate complex types (JSON)
                 if arg_schema.get('type') in ['object', 'array']:
                     instance = load_json_from_value(value)
                     validate(instance=instance, schema=arg_schema)
-                # Validate simple types (string with pattern, etc.)
                 else:
                     instance = value
                     validate(instance=instance, schema=arg_schema)
-
             except ValidationError as e:
-                # Provide more helpful error for pattern failures
                 if 'pattern' in arg_schema and 'does not match' in e.message:
                     console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] Value does not match the required format.")
                     if arg_schema.get('description'):
@@ -143,14 +133,18 @@ def validate_command_with_schema(command_parts: list[str]) -> bool:
     console.print("[green]✅ Command passed all structural and format validation checks.[/green]")
     return True
 
-# ... (rest of helper functions are unchanged) ...
+# --- HELPER FUNCTIONS ---
 def resolve_variables(command_parts: list[str], ci_mode: bool) -> list[str] | None:
+    """Resolves $VAR and ${VAR} from the environment, handling potential shell quotes."""
     resolved_parts = []
     available_vars = {**os.environ}
     
     for part in command_parts:
-        if part.startswith('$'):
-            var_name = part.strip('${}')
+        # NEW: Make a clean version of the part, stripping potential quotes
+        clean_part = part.strip("'\"") 
+        
+        if clean_part.startswith('$'):
+            var_name = clean_part.strip('${}')
             if var_name in available_vars:
                 resolved_parts.append(available_vars[var_name])
             else:
@@ -196,13 +190,8 @@ def redact_output(output: str) -> str:
 app = typer.Typer(
     help="MyOCI: Your personal architect for the OCI CLI."
 )
-# ... (run command is unchanged) ...
 @app.command("run")
-def run_command(
-    oci_command: list[str] = typer.Argument(..., help="The raw OCI command and its arguments to be executed.", metavar="OCI_COMMAND_STRING..."),
-    ci: bool = typer.Option(False, "--ci", help="Enable non-interactive (CI) mode. Fails on ambiguity."),
-    redact: bool = typer.Option(True, "--redact/--no-redact", help="Toggle PII redaction on output.")
-):
+def run_command(oci_command: list[str] = typer.Argument(..., help="The raw OCI command and its arguments to be executed.", metavar="OCI_COMMAND_STRING..."), ci: bool = typer.Option(False, "--ci", help="Enable non-interactive (CI) mode. Fails on ambiguity."), redact: bool = typer.Option(True, "--redact/--no-redact", help="Toggle PII redaction on output.")):
     raw_command_parts = oci_command
     console.rule("[bold cyan]MyOCI Validator Session Started[/]", style="cyan")
     console.print("[1/4] 🔍 [bold]Resolving environment variables...[/bold]")
@@ -238,7 +227,7 @@ def run_command(
             if error_message: console.print(error_message)
             else: console.print("[red]No error output from OCI CLI.[/red]")
     except FileNotFoundError:
-        console.print("[bold red]Error:[/] 'oci' command not found. Is the OCI CLI installed and in your PATH?")
+        console.print("[bold red]Error:[/] 'oci' command not found. Is the OCI CLI installed in your PATH?")
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"[bold red]An unexpected error occurred during command execution:[/]\n{e}")
@@ -248,13 +237,9 @@ def run_command(
     if result.returncode != 0:
         raise typer.Exit(result.returncode)
 
-# --- LEARN COMMAND (UNCHANGED, BUT WITH A NEW HINT) ---
 @app.command("learn")
-def learn_command(
-    oci_command: list[str] = typer.Argument(..., help="A successful OCI command to learn from.", metavar="OCI_COMMAND_STRING...")
-):
+def learn_command(oci_command: list[str] = typer.Argument(..., help="A successful OCI command to learn from.", metavar="OCI_COMMAND_STRING...")):
     command_to_learn = oci_command
-    # ... (code for running and verifying the command is the same) ...
     console.print("🎓 [bold]Learning Mode:[/bold] I will run this command to verify it succeeds.")
     resolved_command_for_learn = resolve_variables(command_to_learn, ci_mode=False)
     if resolved_command_for_learn is None:
@@ -297,9 +282,7 @@ def learn_command(
         yaml.dump(schema, f, sort_keys=False)
     
     console.print(f"\n[bold green]✅ Success![/] New validation template saved to: [cyan]{schema_path}[/cyan]")
-    # --- NEW HINT ---
     console.print(f"✨ [bold]Pro Tip:[/] You can make this template even more powerful by manually editing it to use common schemas. For example, for '--compartment-id', you can add: [yellow]$ref: \"common_oci_args.compartment_id\"[/yellow]")
-
 
 if __name__ == "__main__":
     app()
