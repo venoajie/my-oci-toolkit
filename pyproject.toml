@@ -2,12 +2,13 @@
 name = "myoci-toolkit"
 version = "1.0.0"
 description = "A personal, intelligent wrapper for the OCI CLI."
-authors = [{ name = "Archie", email = "archie@example.com" }]
+authors = [{ name = "Veno Ajie", email = "ven.ajie@protonmail.com" }]
 requires-python = ">=3.8"
 dependencies = [
     "typer[all]",
     "python-dotenv",
     "rich",
+    "rapidfuzz",
 ]
 
 [project.scripts]
