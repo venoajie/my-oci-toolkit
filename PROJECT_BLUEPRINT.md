@@ -73,4 +73,3 @@ This sequence describes the step-by-step process for the `myoci run` command.
 *   **On Failure:** The tool prints the (redacted) failure details. It then checks if the failure is a known, fixable pattern (e.g., "Missing option"). If so, it offers to retry the command with a suggested fix.
 
 ---
-```

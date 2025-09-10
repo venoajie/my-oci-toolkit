@@ -1,60 +1,58 @@
-<!-- FILENAME: README.md -->
-```markdown
-# MyOCI Toolkit
+MyOCI is a personal, safety-focused wrapper for the Oracle Cloud Infrastructure (OCI) CLI. It acts as a local "Site Reliability Engineer" for your commands, designed to make your interactions with OCI safer, more predictable, and self-documenting. It helps you succeed by validating inputs locally, analyzing results clearly, and guiding you toward robust, repeatable commands.
 
-MyOCI is a personal Cloud-CLI architect, designed to make interacting with the OCI (Oracle Cloud Infrastructure) command-line interface safer, smarter, and more reliable. It acts as an intelligent assistant that wraps the native `oci` command, helping you succeed by validating inputs, analyzing results, and guiding you toward the correct command. It is specifically tailored to prevent the frustrating, time-consuming debugging cycles common in complex CLI workflows, especially when working with AI-generated commands.
+This tool is built on SRE principles: **reliability over features, predictability over magic, and safety above all else.** It is designed for engineers who need to be effective and safe, especially during high-pressure situations.
 
-## Core Features
+## Core Philosophy
 
--   **Pre-Execution Validation (`myoci run`):** Catches errors in your command *locally* before they are ever sent to the OCI API. It checks for missing required arguments and incorrect data formats.
--   **Interactive Failure Recovery:** If a command fails with a "Missing option" error, MyOCI analyzes the error and intelligently suggests a fix using a variable from your `.env` file, turning failure into success.
--   **Intelligent Broadening:** If a `list` command for a compartment succeeds but returns no results, MyOCI offers to automatically re-run the command against the entire tenancy, helping you find resources you may have misplaced.
--   **Intelligent Learning (`myoci learn`):** When you get a command to work, `myoci learn` helps you save its structure as a reusable YAML validation template. It even suggests best-practice arguments (like `--output table` or `--all`) to make your future commands more effective.
--   **Proactive Learning:** After any unvalidated command succeeds, MyOCI prompts you to save that success as a new validation template, effortlessly growing your knowledge base.
--   **Safe by Default:** All output, including error messages, retry commands, and debug information, is **automatically redacted** to prevent accidental leakage of sensitive OCIDs when copy-pasting results to an AI or a colleague.
--   **Clear, Unambiguous Feedback:** If a command succeeds but produces no output, MyOCI explicitly tells you, removing the guesswork of whether an error occurred.
--   **Robust Variable Handling:** Automatically detects and substitutes `$VARIABLES` from your `.env` file, correctly handling file paths (expanding `~`) and complex JSON strings.
--   **Machine & AI Ready:** A `--ci` flag enables non-interactive mode for use in scripts, failing with clear errors instead of prompting for input.
+-   **Predictable:** The tool never guesses. If a variable is missing, it fails. If a command returns no results, it says so explicitly. There is no "magic."
+-   **Safe by Default:** All output is automatically redacted to prevent accidental leakage of sensitive OCIDs and IP addresses. All interactive prompts default to "No" to prevent unintended actions.
+-   **Reliable:** The tool helps you build a personal, version-controlled library of known-good commands, ensuring that what worked yesterday will work today.
+
+## Features
+
+-   **Pre-Execution Validation (`myoci run`):** Catches errors in your command *locally* before they are ever sent to the OCI API. It checks for missing required arguments and incorrect data formats based on templates you create.
+-   **Safe Failure Recovery:** If a command fails with a "Missing option" error, MyOCI analyzes the error and offers a safe, targeted fix *only if* it finds an exact variable match in your `.env` file.
+-   **Explicit Empty Results:** If a command succeeds but returns no resources, MyOCI prints a clear, unambiguous message, removing the guesswork of whether an error occurred.
+-   **Reliable Learning (`myoci learn`):** When you run a successful command, `myoci learn` helps you save its structure as a reusable YAML validation template. This builds your personal, trusted knowledge base.
+-   **Proactive Learning:** After any unvalidated command succeeds, MyOCI prompts you to save that success as a new validation template, effortlessly growing your library.
+-   **Template Management (`myoci templates`):** A simple command group (`list`, `show`, `delete`) to easily manage your local library of validation templates.
+-   **Robust Variable Handling:** Automatically detects and substitutes `$VARIABLES` from your `.env` file. It fails with a clear error if a variable is not found.
+-   **CI/CD Ready:** A `--ci` flag enables non-interactive mode for use in scripts, failing with a clear error code instead of prompting for input.
 
 ## Installation
 
-This tool is designed to be installed as a global command, making it available everywhere in your terminal. The recommended method is using `pipx`.
-
 ### Prerequisites
--   Python 3.8+
--   `pipx` (Install with `pip install --user pipx` and `pipx ensurepath`)
+-   Python 3.9+
 -   The OCI CLI must be installed and configured (`~/.oci/config`).
 
 ### Steps
-1.  Clone this repository and navigate into the directory.
-2.  Install the tool using `pipx`:
+1.  Clone this repository.
+2.  Navigate into the repository directory.
+3.  Install the tool using `pip`:
     ```bash
-    pipx install .
+    pip install .
     ```
-3.  Configure your environment by copying `.env.example` to `.env` and adding your most-used OCI variables, such as `OCI_COMPARTMENT_ID` and `OCI_TENANCY_ID`.
+4.  Configure your environment by creating a `.env` file in the project root and adding your most-used OCI variables, such as `OCI_COMPARTMENT_ID` and `OCI_TENANCY_ID`.
 
 ## Usage
 
-The `myoci` command is now available globally. Use `--` to separate `myoci`'s own options from the `oci` command you want to run.
-
 ### 1. The "Fail -> Fix -> Succeed -> Learn" Workflow
 
-This is the ultimate safety net. You run a command suggested by an AI that's missing an argument.
+This is the core safety net. You run a command that's missing a required argument.
 
 **Step 1: Run the incomplete command.**
 ```bash
-# AI suggests: oci compute instance list
-myoci run -- oci compute instance list
+myoci run oci compute instance list
 ```
 
-**Step 2: Let MyOCI guide you.**
-MyOCI runs the command, sees it fail, analyzes the error, and offers a fix.
+**Step 2: Let MyOCI guide you safely.**
+MyOCI runs the command, sees it fail, analyzes the error, and offers a precise, safe fix.
 ```
 > ❌ Command Failed!
 > Error: Missing option(s) --compartment-id.
 >
 > 💡 It seems the command failed because it was missing --compartment-id.
-> I found $OCI_COMPARTMENT_ID in your environment. Would you like to retry? [y/N]: y
+> I found an exact match $OCI_COMPARTMENT_ID in your environment. Would you like to retry? [y/N]: y
 ```
 
 **Step 3: Succeed and Learn.**
@@ -67,41 +65,32 @@ MyOCI re-runs the corrected command. It succeeds, and then offers to save this n
 ```
 You are then guided to create a permanent safety net for `oci compute instance list`.
 
-### 2. The "Empty -> Broaden -> Succeed" Workflow
+### 2. Managing Your Knowledge Base
 
-You're looking for an instance but can't remember which compartment it's in.
+Use the `templates` command to manage your personal library of validated commands.
 
-**Step 1: Search a specific (but empty) compartment.**
+**List all learned commands:**
 ```bash
-myoci run -- oci compute instance list --compartment-id '$MY_EMPTY_COMPARTMENT_ID'
+myoci templates list
 ```
 
-**Step 2: Accept the intelligent suggestion.**
-MyOCI sees the command succeeded but found nothing, and offers a next step.
-```
-> ✅ Command Succeeded!
-> myoci note: The OCI command was successful but returned no instances in this compartment.
->
-> 💡 I found no instances here. Would you like to search the entire tenancy ($OCI_TENANCY_ID) instead? [y/N]: y
+**Inspect the rules for a specific command:**
+```bash
+myoci templates show "oci compute instance list"
 ```
 
-**Step 3: Find your resources.**
-MyOCI re-runs the command with the broader scope, and you find your instance.
-```
-> Re-running with a broader scope:
-> oci compute instance list --compartment-id [REDACTED_TENANCY_OCID]
->
-> ✅ Retry Succeeded!
-> { ... (redacted JSON output of your instances) ... }
+**Delete an outdated template:**
+```bash
+myoci templates delete "oci compute instance list"
 ```
 
 ### 3. Getting Raw Output for Scripts
 
-An AI agent or a script needs raw, machine-readable data.
+An automation script needs raw, machine-readable data.
 
 ```bash
 myoci run --no-redact --ci -- oci compute instance list --compartment-id '$OCI_COMPARTMENT_ID' --output json
 ```
 -   `--no-redact`: Ensures the output JSON contains the real, full OCIDs.
--   `--ci`: Ensures the script will fail with an error code instead of prompting.
+-   `--ci`: Ensures the script will fail with an error code instead of prompting for input.
 ```
