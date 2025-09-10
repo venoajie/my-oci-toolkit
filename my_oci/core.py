@@ -1,5 +1,4 @@
 # myoci/core.py
-# myoci/core.py
 import os
 import subprocess
 import typer
@@ -162,8 +161,34 @@ def preflight_file_check(command_parts: list[str]) -> bool:
                     return False
     return True
 
+def _partially_redact_ocid(match: re.Match) -> str:
+    """
+    Replacement function for re.sub to perform context-aware partial redaction.
+    Turns "ocid1.tenancy.oc1..uniqueidentifierstring" into
+    "ocid1.tenancy.oc1..uniq...ring".
+    """
+    ocid = match.group(0)
+    parts = ocid.rsplit('.', 1)
+    if len(parts) != 2:
+        return "[REDACTED_OCID]" # Fallback for malformed OCIDs
+
+    prefix, unique_id = parts
+    if len(unique_id) > 8:
+        # Show first 4 and last 4 characters of the unique part
+        redacted_id = f"{unique_id[:4]}...{unique_id[-4:]}"
+        return f"{prefix}.{redacted_id}"
+    else:
+        # If the unique part is too short, fully redact to be safe
+        return f"{prefix}.[REDACTED]"
+
+
 def redact_output(output: str) -> str:
-    redacted_output = re.sub(constants.OCID_PATTERN, "[REDACTED_OCID]", output, flags=re.IGNORECASE)
+    """
+    Redacts sensitive information from a string.
+    - OCIDs are partially redacted to preserve context for debugging.
+    - IP addresses are fully redacted.
+    """
+    redacted_output = re.sub(constants.OCID_PATTERN, _partially_redact_ocid, output, flags=re.IGNORECASE)
     redacted_output = re.sub(constants.IP_PATTERN, "[REDACTED_IP]", redacted_output)
     return redacted_output
 
