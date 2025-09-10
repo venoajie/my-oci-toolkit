@@ -1,5 +1,6 @@
 # my_oci\cli.py
 
+import shlex
 import typer
 from pathlib import Path
 from dotenv import load_dotenv
@@ -25,10 +26,10 @@ load_dotenv(dotenv_path=DOTENV_PATH)
 COMMON_SCHEMAS_PATH = TEMPLATES_DIR / "common_schemas.yaml"
 COMMON_SCHEMAS = core.load_common_schemas(COMMON_SCHEMAS_PATH)
 
-
 # --- CLI COMMANDS ---
 
 @app.command("run")
+
 def run_command(
     oci_command: list[str] = typer.Argument(..., help="The raw OCI command and its arguments.", metavar="OCI_COMMAND_STRING..."),
     ci: bool = typer.Option(False, "--ci", help="Enable non-interactive (CI) mode. Fails on ambiguity."),
@@ -61,41 +62,65 @@ def run_command(
         console.print("[yellow]Info: No validation schema found. Proceeding without deep validation.[/yellow]")
     
     console.print("\n[4/4] ▶️  [bold]Executing command...[/bold]")
-    return_code, stdout, stderr = core.execute_command(resolved_cmd, redact)
+    return_code, stdout, stderr = core.execute_command(resolved_cmd)
     
-    # --- Interactive Failure Recovery Logic (with Guardrails) ---
-    if return_code != 0 and validation_result is None and not ci:
-        suggestion = core.analyze_failure_and_suggest_fix(stderr)
-        if suggestion:
-            missing_flag, env_var = suggestion
-            console.print() # Spacer
-            
-            # Principle: User in Control. Default is False (No).
-            prompt_text = (
-                f"💡 It seems the command failed because it was missing [bold cyan]{missing_flag}[/bold].\n"
-                f"I found [bold green]${env_var}[/bold] in your environment. Would you like to retry with this argument added?"
-            )
-            if typer.confirm(prompt_text, default=False):
-                
-                corrected_command = resolved_cmd + [missing_flag, f'${env_var}']
-                console.print("\n[bold]Re-running with suggested fix...[/bold]")
-                
-                final_command = core.resolve_variables(corrected_command, ci)
-                if final_command:
-                    return_code, _, _ = core.execute_command(final_command, redact)
-    # --- End of Logic ---
+    # --- Centralized Printing and Retry Logic ---
+    if return_code == 0:
+        console.print("[bold green]✅ Command Succeeded![/]")
+        output_to_print = core.redact_output(stdout) if redact else stdout
+        if output_to_print:
+            print(output_to_print)
+    else:
+        # Initial command failed, print details
+        human_readable_cmd = shlex.join(resolved_cmd)
+        if redact:
+            human_readable_cmd = core.redact_output(human_readable_cmd)
+            stdout = core.redact_output(stdout)
+            stderr = core.redact_output(stderr)
+        
+        console.print("[bold red]❌ Command Failed![/]")
+        console.print(f"[bold yellow]🔎 Final command executed:[/bold yellow]\n[cyan]{human_readable_cmd}[/cyan]\n")
+        error_message = (stderr.strip() + "\n" + stdout.strip()).strip()
+        if error_message: console.print(error_message)
+
+        # Attempt interactive failure recovery
+        if validation_result is None and not ci:
+            suggestion = core.analyze_failure_and_suggest_fix(stderr)
+            if suggestion:
+                missing_flag, env_var = suggestion
+                console.print()
+                prompt_text = (
+                    f"💡 It seems the command failed because it was missing [bold cyan]{missing_flag}[/bold].\n"
+                    f"I found [bold green]${env_var}[/bold] in your environment. Would you like to retry with this argument added?"
+                )
+                if typer.confirm(prompt_text, default=False):
+                    corrected_command = resolved_cmd + [missing_flag, f'${env_var}']
+                    console.print("\n[bold]Re-running with suggested fix...[/bold]")
+                    
+                    final_command = core.resolve_variables(corrected_command, ci)
+                    if final_command:
+                        return_code, stdout, stderr = core.execute_command(final_command)
+                        # Handle result of the RETRY
+                        if return_code == 0:
+                            console.print("[bold green]✅ Command Succeeded![/]")
+                            output_to_print = core.redact_output(stdout) if redact else stdout
+                            if output_to_print:
+                                print(output_to_print)
+                        else:
+                            console.print("[bold red]❌ Retry Failed.[/]")
+                            error_message = (stderr.strip() + "\n" + stdout.strip()).strip()
+                            if error_message: console.print(error_message)
 
     console.rule("[bold cyan]Validator Session Ended[/]", style="cyan")
 
     if return_code == 0 and validation_result is None and not ci:
         console.print()
-        # Principle: User in Control. Default is False (No).
         if typer.confirm("✨ This unvalidated command succeeded. Would you like to create a validation template from it now?", default=False):
             core.learn_from_command(oci_command, TEMPLATES_DIR, COMMON_SCHEMAS)
 
     if return_code != 0:
         raise typer.Exit(return_code)
-
+    
 @app.command("learn")
 def learn_command(
     oci_command: list[str] = typer.Argument(..., help="A successful OCI command to learn from.", metavar="OCI_COMMAND_STRING...")

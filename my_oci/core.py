@@ -182,31 +182,16 @@ def redact_output(output: str) -> str:
     redacted_output = re.sub(constants.IP_PATTERN, "[REDACTED_IP]", redacted_output)
     return redacted_output
 
-def execute_command(command: list[str], redact: bool) -> tuple[int, str, str]:
-    """Executes a command and returns its return code, stdout, and stderr."""
+def execute_command(command: list[str]) -> tuple[int, str, str]:
+    """
+    Executes a command and returns its return code, stdout, and stderr.
+    This function NO LONGER prints to the console.
+    """
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
-        stdout = result.stdout
-        stderr = result.stderr
-        
-        if result.returncode == 0:
-            if redact: stdout = redact_output(stdout)
-            console.print("[bold green]✅ Command Succeeded![/]")
-            if stdout: print(stdout)
-        else:
-            human_readable_cmd = shlex.join(command)
-            if redact:
-                human_readable_cmd = redact_output(human_readable_cmd)
-                stdout = redact_output(stdout)
-                stderr = redact_output(stderr)
-            console.print("[bold red]❌ Command Failed![/]")
-            console.print(f"[bold yellow]🔎 Final command executed:[/bold yellow]\n[cyan]{human_readable_cmd}[/cyan]\n")
-            error_message = (stderr.strip() + "\n" + stdout.strip()).strip()
-            if error_message: console.print(error_message)
-        
         return result.returncode, result.stdout, result.stderr
     except Exception as e:
-        console.print(f"[bold red]An unexpected error occurred during command execution:[/]\n{e}")
+        # In case of a catastrophic failure (e.g., command not found), return an error.
         return 1, "", str(e)
 
 def analyze_failure_and_suggest_fix(stderr: str) -> tuple[str, str] | None:
@@ -218,15 +203,12 @@ def analyze_failure_and_suggest_fix(stderr: str) -> tuple[str, str] | None:
 
     if match:
         missing_flag = match.group(1)
-        # Convert flag to a searchable env var key (e.g., --compartment-id -> COMPARTMENT_ID)
         search_key = missing_flag.strip('-').replace('-', '_').upper()
         
-        # Find the first matching environment variable
         for env_var in os.environ:
             if search_key in env_var:
-                return missing_flag, env_var # Return the flag and the env var name
+                return missing_flag, env_var
     return None
-
 
 # --- LEARNING LOGIC ---
 
