@@ -1,14 +1,14 @@
+# pyproject.toml
 [project]
-name = "my-oci-toolkit"
-version = "1.0.2"
-description = "A personal, intelligent wrapper for the OCI CLI."
-authors = [{ name = "Veno Ajie", email = "ven.ajie@protonmail.com" }]
+name = "myoci-toolkit"
+version = "2.0.0"
+description = "A personal SRE architect for the OCI CLI, focused on reliability and safety."
+authors = [{ name = "Elena SRE", email = "elena@example.com" }]
 requires-python = ">=3.9"
 dependencies = [
     "typer[all]",
     "python-dotenv",
     "rich",
-    "rapidfuzz",
     "PyYAML",
     "jsonschema",
 ]
@@ -20,16 +20,5 @@ myoci = "my_oci.cli:app"
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-# This tells setuptools to include data files specified in package_data
-include-package-data = true
-
 [tool.setuptools.packages.find]
-# This explicitly tells setuptools to only look for packages in the current directory
-# It will find 'my_oci' and ignore other top-level directories
 where = ["."]
-
-[tool.setuptools.package-data]
-# This is crucial: it tells setuptools to include all .yaml files
-# found inside the 'my_oci.templates' directory.
-"my_oci.templates" = ["*.yaml"]
