@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-myoci = "myoci.cli:app"
+myoci = "my_oci.cli:app"
 
 [build-system]
 requires = ["setuptools>=61.0"]
