@@ -1,5 +1,4 @@
-
-# myoci/cli.py (DEBUGGING VERSION)
+# myoci/cli.py
 import shlex
 import typer
 import os
@@ -35,6 +34,9 @@ def run_command(
     ci: bool = typer.Option(False, "--ci", help="Enable non-interactive (CI) mode. Fails on ambiguity."),
     redact: bool = typer.Option(True, "--redact/--no-redact", help="Toggle PII redaction on output.")
 ):
+    """
+    Validates and executes an OCI command against known-good templates.
+    """
     console.rule("[bold cyan]MyOCI Validator Session Started[/]", style="cyan")
 
     console.print("[1/4] 🔍 [bold]Resolving environment variables...[/bold]")
@@ -88,27 +90,21 @@ def run_command(
                 )
                 if typer.confirm(prompt_text, default=False):
                     final_command = resolved_cmd + [missing_flag, os.environ[env_var]]
-                    console.print("\n[bold]Re-running with suggested fix...[/bold]")
+                    
+                    # --- NEW: Informative Retry Message ---
+                    human_readable_retry_cmd = shlex.join(final_command)
+                    if redact:
+                        human_readable_retry_cmd = core.redact_output(human_readable_retry_cmd)
+                    console.print(f"\n[bold]Re-running with suggested fix:[/bold]\n[cyan]{human_readable_retry_cmd}[/cyan]")
+                    # --- END NEW ---
                     
                     retry_code, retry_stdout, retry_stderr = core.execute_command(final_command)
-                    
-                    # --- START OF DEBUGGING PRINTS ---
-                    console.print("\n[bold magenta]--- DEBUGGING INFO ---[/bold magenta]")
-                    console.print(f"[DEBUG] Retry Return Code: {retry_code}")
-                    console.print(f"[DEBUG] Retry STDOUT (raw): {repr(retry_stdout)}")
-                    console.print(f"[DEBUG] Retry STDERR (raw): {repr(retry_stderr)}")
-                    # --- END OF DEBUGGING PRINTS ---
-
                     if retry_code == 0:
-                        console.print("[DEBUG] Entered 'retry_code == 0' block.")
                         return_code = 0 
                         console.print("[bold green]✅ Retry Succeeded![/]")
                         output_to_print = core.redact_output(retry_stdout) if redact else retry_stdout
                         if output_to_print:
-                            console.print("[DEBUG] Entered 'if output_to_print:' block. Printing now.")
                             print(output_to_print.strip())
-                        else:
-                            console.print("[DEBUG] SKIPPED 'if output_to_print:' block because variable was empty.")
                     else:
                         console.print("[bold red]❌ Retry Failed.[/]")
                         if retry_stderr.strip():
