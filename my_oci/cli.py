@@ -81,7 +81,6 @@ def run_command(
                               f"Would you like to search {suggestion['broad_resource_name']} instead?")
                     if typer.confirm(prompt, default=False):
                         
-                        # --- ROBUST REPLACEMENT LOGIC ---
                         new_cmd = []
                         skip_next = False
                         for part in resolved_cmd:
@@ -89,16 +88,21 @@ def run_command(
                                 skip_next = False
                                 continue
                             if part == narrow_arg:
-                                skip_next = True # Skips the next part, which is the value
+                                skip_next = True
                                 continue
                             new_cmd.append(part)
                         new_cmd.extend([narrow_arg, os.environ[broad_env_var]])
-                        # --- END OF LOGIC ---
-
-                        human_readable_retry = shlex.join(new_cmd)
-                        if redact: human_readable_retry = core.redact_output(human_readable_retry)
-                        console.print(f"\n[bold]Re-running with a broader scope:[/bold]\n[cyan]{human_readable_retry}[/cyan]")
                         
+                        # --- THE FINAL PII FIX ---
+                        # Create the human-readable string for display purposes ONLY.
+                        display_cmd_str = shlex.join(new_cmd)
+                        # ALWAYS redact this display string if redaction is enabled.
+                        if redact:
+                            display_cmd_str = core.redact_output(display_cmd_str)
+                        console.print(f"\n[bold]Re-running with a broader scope:[/bold]\n[cyan]{display_cmd_str}[/cyan]")
+                        # --- END OF FIX ---
+                        
+                        # Execute the actual command (new_cmd), which still contains the real OCID.
                         return_code, stdout, stderr = core.execute_command(new_cmd)
                         if return_code == 0:
                             console.print("[bold green]✅ Retry Succeeded![/]")
@@ -127,9 +131,11 @@ def run_command(
                           f"I found [bold green]${env_var}[/bold] in your environment. Would you like to retry?")
                 if typer.confirm(prompt, default=False):
                     final_command = resolved_cmd + [missing_flag, os.environ[env_var]]
-                    human_readable_retry = shlex.join(final_command)
-                    if redact: human_readable_retry = core.redact_output(human_readable_retry)
-                    console.print(f"\n[bold]Re-running with suggested fix:[/bold]\n[cyan]{human_readable_retry}[/cyan]")
+                    
+                    display_cmd_str = shlex.join(final_command)
+                    if redact:
+                        display_cmd_str = core.redact_output(display_cmd_str)
+                    console.print(f"\n[bold]Re-running with suggested fix:[/bold]\n[cyan]{display_cmd_str}[/cyan]")
                     
                     return_code, stdout, stderr = core.execute_command(final_command)
                     if return_code == 0:
