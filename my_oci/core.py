@@ -182,7 +182,8 @@ def redact_output(output: str) -> str:
     redacted_output = re.sub(constants.IP_PATTERN, "[REDACTED_IP]", redacted_output)
     return redacted_output
 
-def execute_command(command: list[str], redact: bool):
+def execute_command(command: list[str], redact: bool) -> tuple[int, str, str]:
+    """Executes a command and returns its return code, stdout, and stderr."""
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         stdout = result.stdout
@@ -203,10 +204,29 @@ def execute_command(command: list[str], redact: bool):
             error_message = (stderr.strip() + "\n" + stdout.strip()).strip()
             if error_message: console.print(error_message)
         
-        return result.returncode
+        return result.returncode, result.stdout, result.stderr
     except Exception as e:
         console.print(f"[bold red]An unexpected error occurred during command execution:[/]\n{e}")
-        return 1
+        return 1, "", str(e)
+
+def analyze_failure_and_suggest_fix(stderr: str) -> tuple[str, str] | None:
+    """Parses stderr for missing argument errors and suggests a fix from .env"""
+    # This regex looks for common "missing argument" phrases from OCI CLI
+    match = re.search(r"Missing option\(s\)\s+(--[a-zA-Z0-9-]+)", stderr)
+    if not match:
+        match = re.search(r"Missing required parameter\s+(--[a-zA-Z0-9-]+)", stderr)
+
+    if match:
+        missing_flag = match.group(1)
+        # Convert flag to a searchable env var key (e.g., --compartment-id -> COMPARTMENT_ID)
+        search_key = missing_flag.strip('-').replace('-', '_').upper()
+        
+        # Find the first matching environment variable
+        for env_var in os.environ:
+            if search_key in env_var:
+                return missing_flag, env_var # Return the flag and the env var name
+    return None
+
 
 # --- LEARNING LOGIC ---
 
