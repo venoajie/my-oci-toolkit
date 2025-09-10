@@ -1,6 +1,8 @@
+
 # myoci/cli.py
 import shlex
 import typer
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 from rich.console import Console
@@ -62,15 +64,12 @@ def run_command(
     console.print("\n[4/4] ▶️  [bold]Executing command...[/bold]")
     return_code, stdout, stderr = core.execute_command(resolved_cmd)
 
-    # --- NEW, SIMPLIFIED LOGIC ---
     if return_code == 0:
-        # --- SUCCESS ON FIRST TRY ---
         console.print("[bold green]✅ Command Succeeded![/]")
         output_to_print = core.redact_output(stdout) if redact else stdout
         if output_to_print:
             print(output_to_print.strip())
     else:
-        # --- FAILURE ON FIRST TRY ---
         human_readable_cmd = shlex.join(resolved_cmd)
         if redact:
             human_readable_cmd = core.redact_output(human_readable_cmd)
@@ -81,7 +80,6 @@ def run_command(
         if stderr.strip():
             console.print(stderr.strip())
 
-        # --- ATTEMPT RETRY LOGIC (only after a failure) ---
         if validation_result is None and not ci:
             suggestion = core.analyze_failure_and_suggest_fix(stderr)
             if suggestion:
@@ -92,28 +90,25 @@ def run_command(
                     f"I found [bold green]${env_var}[/bold] in your environment. Would you like to retry with this argument added?"
                 )
                 if typer.confirm(prompt_text, default=False):
-                    corrected_command = resolved_cmd + [missing_flag, f'${env_var}']
+                    # --- SIMPLIFIED AND CORRECTED LOGIC ---
+                    # Directly use the value from the environment. No re-resolving needed.
+                    final_command = resolved_cmd + [missing_flag, os.environ[env_var]]
                     console.print("\n[bold]Re-running with suggested fix...[/bold]")
                     
-                    final_command = core.resolve_variables(corrected_command, ci)
-                    if final_command:
-                        # Execute and immediately handle the result of the retry
-                        retry_code, retry_stdout, retry_stderr = core.execute_command(final_command)
-                        if retry_code == 0:
-                            # IMPORTANT: Update the main return_code for the final checks
-                            return_code = 0
-                            console.print("[bold green]✅ Retry Succeeded![/]")
-                            output_to_print = core.redact_output(retry_stdout) if redact else retry_stdout
-                            if output_to_print:
-                                print(output_to_print.strip())
-                        else:
-                            console.print("[bold red]❌ Retry Failed.[/]")
-                            if retry_stderr.strip():
-                                console.print(core.redact_output(retry_stderr.strip()) if redact else retry_stderr.strip())
+                    retry_code, retry_stdout, retry_stderr = core.execute_command(final_command)
+                    if retry_code == 0:
+                        return_code = 0 # Update final status
+                        console.print("[bold green]✅ Retry Succeeded![/]")
+                        output_to_print = core.redact_output(retry_stdout) if redact else retry_stdout
+                        if output_to_print:
+                            print(output_to_print.strip())
+                    else:
+                        console.print("[bold red]❌ Retry Failed.[/]")
+                        if retry_stderr.strip():
+                            console.print(core.redact_output(retry_stderr.strip()) if redact else retry_stderr.strip())
 
     console.rule("[bold cyan]Validator Session Ended[/]", style="cyan")
 
-    # This block now correctly checks the FINAL state of return_code
     if return_code == 0 and validation_result is None and not ci:
         console.print()
         if typer.confirm("✨ This unvalidated command succeeded. Would you like to create a validation template from it now?", default=False):
