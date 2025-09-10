@@ -62,6 +62,7 @@ def run_command(
     console.print("\n[4/4] ▶️  [bold]Executing command...[/bold]")
     return_code, stdout, stderr = core.execute_command(resolved_cmd)
 
+    # --- NEW, SIMPLIFIED LOGIC ---
     if return_code == 0:
         # --- SUCCESS ON FIRST TRY ---
         console.print("[bold green]✅ Command Succeeded![/]")
@@ -108,7 +109,7 @@ def run_command(
                         else:
                             console.print("[bold red]❌ Retry Failed.[/]")
                             if retry_stderr.strip():
-                                console.print(retry_stderr.strip())
+                                console.print(core.redact_output(retry_stderr.strip()) if redact else retry_stderr.strip())
 
     console.rule("[bold cyan]Validator Session Ended[/]", style="cyan")
 
