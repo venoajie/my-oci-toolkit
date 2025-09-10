@@ -77,9 +77,13 @@ def run_command(
         final_cmd_display = core.redact_output(human_readable_cmd) if redact else human_readable_cmd
         stderr_display = core.redact_output(stderr) if redact else stderr
 
+        # MODIFIED: Reordered output for better readability on failure.
+        console.print(f"[cyan]{final_cmd_display}[/cyan]")
         console.print("[bold red]❌ Command Failed![/]")
-        console.print(f"[bold yellow]🔎 Final command executed:[/bold yellow]\n[cyan]{final_cmd_display}[/cyan]\n")
-        if stderr_display.strip(): console.print(stderr_display.strip())
+
+        if stderr_display.strip():
+            console.print() # Add a newline for separation
+            console.print(stderr_display.strip())
 
         if not ci:
             suggestion = core.analyze_failure_and_suggest_fix(stderr)
