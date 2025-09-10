@@ -1,4 +1,3 @@
-
 # myoci/cli.py
 import shlex
 import typer
@@ -70,7 +69,6 @@ def run_command(
         else:
             console.print("[dim]myoci note: The OCI command was successful but returned no resources matching your query.[/dim]")
             
-            # --- Intelligent Broadening Logic ---
             command_base_str = ' '.join([p for p in resolved_cmd if not p.startswith('--')][:4])
             if command_base_str in core.BROADENING_SUGGESTIONS and not ci:
                 suggestion = core.BROADENING_SUGGESTIONS[command_base_str]
@@ -82,10 +80,21 @@ def run_command(
                     prompt = (f"💡 I found no {suggestion['narrow_resource_name']}. "
                               f"Would you like to search {suggestion['broad_resource_name']} instead?")
                     if typer.confirm(prompt, default=False):
-                        # Create a new command, replacing the narrow ID with the broad one
-                        new_cmd = [p for p in resolved_cmd if p != narrow_arg and p not in os.environ.get(narrow_arg.strip('-').replace('-', '_').upper(), '')]
-                        new_cmd.extend([narrow_arg, os.environ[broad_env_var]])
                         
+                        # --- ROBUST REPLACEMENT LOGIC ---
+                        new_cmd = []
+                        skip_next = False
+                        for part in resolved_cmd:
+                            if skip_next:
+                                skip_next = False
+                                continue
+                            if part == narrow_arg:
+                                skip_next = True # Skips the next part, which is the value
+                                continue
+                            new_cmd.append(part)
+                        new_cmd.extend([narrow_arg, os.environ[broad_env_var]])
+                        # --- END OF LOGIC ---
+
                         human_readable_retry = shlex.join(new_cmd)
                         if redact: human_readable_retry = core.redact_output(human_readable_retry)
                         console.print(f"\n[bold]Re-running with a broader scope:[/bold]\n[cyan]{human_readable_retry}[/cyan]")
