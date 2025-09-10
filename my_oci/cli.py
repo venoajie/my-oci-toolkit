@@ -55,13 +55,13 @@ def run_command(
     console.print("[green]✅ File paths are valid.[/green]\n")
     
     console.print("[3/4] 📝 [bold]Validating command against schema...[/bold]")
-    validation_result = core.validate_command_with_schema(resolved_cmd, TEMPLATES_DIR, COMMON_SCHEMAS)
+    validation_result, resolved_cmd = core.validate_command_with_schema(resolved_cmd, TEMPLATES_DIR, COMMON_SCHEMAS)
     if validation_result is False:
         console.rule("[bold red]Session Aborted[/]", style="red"); raise typer.Exit(1)
     
     console.print("\n[4/4] ▶️  [bold]Executing command...[/bold]")
     return_code = core.execute_command(resolved_cmd, redact)
-    
+        
     console.rule("[bold cyan]Validator Session Ended[/]", style="cyan")
     if return_code != 0:
         raise typer.Exit(return_code)
