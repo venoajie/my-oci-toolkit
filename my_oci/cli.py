@@ -1,4 +1,5 @@
 # my_oci\cli.py
+
 import typer
 from pathlib import Path
 from dotenv import load_dotenv
@@ -52,24 +53,44 @@ def run_command(
     console.print("[3/4] 📝 [bold]Validating command against schema...[/bold]")
     validation_result, resolved_cmd = core.validate_command_with_schema(resolved_cmd, TEMPLATES_DIR, COMMON_SCHEMAS)
     
-    # --- Improved Messaging Logic ---
     if validation_result is False:
         console.rule("[bold red]Session Aborted[/]", style="red"); raise typer.Exit(1)
     elif validation_result is True:
         console.print("[green]✅ Command passed all structural and format validation checks.[/green]")
-    else: # This is the case where validation_result is None
-        console.print("[yellow]Info: No validation schema found for this command. Proceeding without deep validation.[/yellow]")
+    else:
+        console.print("[yellow]Info: No validation schema found. Proceeding without deep validation.[/yellow]")
     
     console.print("\n[4/4] ▶️  [bold]Executing command...[/bold]")
-    return_code = core.execute_command(resolved_cmd, redact)
+    return_code, stdout, stderr = core.execute_command(resolved_cmd, redact)
     
+    # --- Interactive Failure Recovery Logic (with Guardrails) ---
+    if return_code != 0 and validation_result is None and not ci:
+        suggestion = core.analyze_failure_and_suggest_fix(stderr)
+        if suggestion:
+            missing_flag, env_var = suggestion
+            console.print() # Spacer
+            
+            # Principle: User in Control. Default is False (No).
+            prompt_text = (
+                f"💡 It seems the command failed because it was missing [bold cyan]{missing_flag}[/bold].\n"
+                f"I found [bold green]${env_var}[/bold] in your environment. Would you like to retry with this argument added?"
+            )
+            if typer.confirm(prompt_text, default=False):
+                
+                corrected_command = resolved_cmd + [missing_flag, f'${env_var}']
+                console.print("\n[bold]Re-running with suggested fix...[/bold]")
+                
+                final_command = core.resolve_variables(corrected_command, ci)
+                if final_command:
+                    return_code, _, _ = core.execute_command(final_command, redact)
+    # --- End of Logic ---
+
     console.rule("[bold cyan]Validator Session Ended[/]", style="cyan")
 
-    # --- Proactive Learning Logic ---
     if return_code == 0 and validation_result is None and not ci:
-        console.print() # Add a blank line for spacing
-        if typer.confirm("✨ This unvalidated command succeeded. Would you like to create a validation template from it now?"):
-            # We use the original `oci_command` so variables are preserved for learning
+        console.print()
+        # Principle: User in Control. Default is False (No).
+        if typer.confirm("✨ This unvalidated command succeeded. Would you like to create a validation template from it now?", default=False):
             core.learn_from_command(oci_command, TEMPLATES_DIR, COMMON_SCHEMAS)
 
     if return_code != 0:
