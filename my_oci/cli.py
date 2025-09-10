@@ -1,3 +1,4 @@
+
 # myoci/cli.py
 import shlex
 import typer
@@ -34,9 +35,7 @@ def run_command(
     ci: bool = typer.Option(False, "--ci", help="Enable non-interactive (CI) mode. Fails on ambiguity."),
     redact: bool = typer.Option(True, "--redact/--no-redact", help="Toggle PII redaction on output.")
 ):
-    """
-    Validates and executes an OCI command against known-good templates.
-    """
+    """Validates and executes an OCI command against known-good templates."""
     console.rule("[bold cyan]MyOCI Validator Session Started[/]", style="cyan")
 
     console.print("[1/4] 🔍 [bold]Resolving environment variables...[/bold]")
@@ -66,49 +65,72 @@ def run_command(
     if return_code == 0:
         console.print("[bold green]✅ Command Succeeded![/]")
         output_to_print = core.redact_output(stdout) if redact else stdout
-        if output_to_print:
+        if output_to_print.strip():
             print(output_to_print.strip())
-    else:
+        else:
+            console.print("[dim]myoci note: The OCI command was successful but returned no resources matching your query.[/dim]")
+            
+            # --- Intelligent Broadening Logic ---
+            command_base_str = ' '.join([p for p in resolved_cmd if not p.startswith('--')][:4])
+            if command_base_str in core.BROADENING_SUGGESTIONS and not ci:
+                suggestion = core.BROADENING_SUGGESTIONS[command_base_str]
+                narrow_arg = suggestion['narrow_arg']
+                broad_env_var = suggestion['broad_env_var']
+                
+                if narrow_arg in resolved_cmd and broad_env_var in os.environ:
+                    console.print()
+                    prompt = (f"💡 I found no {suggestion['narrow_resource_name']}. "
+                              f"Would you like to search {suggestion['broad_resource_name']} instead?")
+                    if typer.confirm(prompt, default=False):
+                        # Create a new command, replacing the narrow ID with the broad one
+                        new_cmd = [p for p in resolved_cmd if p != narrow_arg and p not in os.environ.get(narrow_arg.strip('-').replace('-', '_').upper(), '')]
+                        new_cmd.extend([narrow_arg, os.environ[broad_env_var]])
+                        
+                        human_readable_retry = shlex.join(new_cmd)
+                        if redact: human_readable_retry = core.redact_output(human_readable_retry)
+                        console.print(f"\n[bold]Re-running with a broader scope:[/bold]\n[cyan]{human_readable_retry}[/cyan]")
+                        
+                        return_code, stdout, stderr = core.execute_command(new_cmd)
+                        if return_code == 0:
+                            console.print("[bold green]✅ Retry Succeeded![/]")
+                            output_to_print = core.redact_output(stdout) if redact else stdout
+                            if output_to_print.strip(): print(output_to_print.strip())
+                            else: console.print("[dim]myoci note: No resources found in the broader scope either.[/dim]")
+                        else:
+                            console.print("[bold red]❌ Retry Failed.[/]")
+                            if stderr.strip(): console.print(core.redact_output(stderr.strip()) if redact else stderr.strip())
+
+    else: # Initial command failed
         human_readable_cmd = shlex.join(resolved_cmd)
         if redact:
             human_readable_cmd = core.redact_output(human_readable_cmd)
             stderr = core.redact_output(stderr)
-
         console.print("[bold red]❌ Command Failed![/]")
         console.print(f"[bold yellow]🔎 Final command executed:[/bold yellow]\n[cyan]{human_readable_cmd}[/cyan]\n")
-        if stderr.strip():
-            console.print(stderr.strip())
+        if stderr.strip(): console.print(stderr.strip())
 
         if validation_result is None and not ci:
             suggestion = core.analyze_failure_and_suggest_fix(stderr)
             if suggestion:
                 missing_flag, env_var = suggestion
                 console.print()
-                prompt_text = (
-                    f"💡 It seems the command failed because it was missing [bold cyan]{missing_flag}[/bold].\n"
-                    f"I found [bold green]${env_var}[/bold] in your environment. Would you like to retry with this argument added?"
-                )
-                if typer.confirm(prompt_text, default=False):
+                prompt = (f"💡 It seems the command failed because it was missing [bold cyan]{missing_flag}[/bold].\n"
+                          f"I found [bold green]${env_var}[/bold] in your environment. Would you like to retry?")
+                if typer.confirm(prompt, default=False):
                     final_command = resolved_cmd + [missing_flag, os.environ[env_var]]
+                    human_readable_retry = shlex.join(final_command)
+                    if redact: human_readable_retry = core.redact_output(human_readable_retry)
+                    console.print(f"\n[bold]Re-running with suggested fix:[/bold]\n[cyan]{human_readable_retry}[/cyan]")
                     
-                    # --- NEW: Informative Retry Message ---
-                    human_readable_retry_cmd = shlex.join(final_command)
-                    if redact:
-                        human_readable_retry_cmd = core.redact_output(human_readable_retry_cmd)
-                    console.print(f"\n[bold]Re-running with suggested fix:[/bold]\n[cyan]{human_readable_retry_cmd}[/cyan]")
-                    # --- END NEW ---
-                    
-                    retry_code, retry_stdout, retry_stderr = core.execute_command(final_command)
-                    if retry_code == 0:
-                        return_code = 0 
+                    return_code, stdout, stderr = core.execute_command(final_command)
+                    if return_code == 0:
                         console.print("[bold green]✅ Retry Succeeded![/]")
-                        output_to_print = core.redact_output(retry_stdout) if redact else retry_stdout
-                        if output_to_print:
-                            print(output_to_print.strip())
+                        output_to_print = core.redact_output(stdout) if redact else stdout
+                        if output_to_print.strip(): print(output_to_print.strip())
+                        else: console.print("[dim]myoci note: The OCI command was successful but returned no resources.[/dim]")
                     else:
                         console.print("[bold red]❌ Retry Failed.[/]")
-                        if retry_stderr.strip():
-                            console.print(core.redact_output(retry_stderr.strip()) if redact else retry_stderr.strip())
+                        if stderr.strip(): console.print(core.redact_output(stderr.strip()) if redact else stderr.strip())
 
     console.rule("[bold cyan]Validator Session Ended[/]", style="cyan")
 
@@ -124,6 +146,7 @@ def run_command(
 def learn_command(
     oci_command: list[str] = typer.Argument(..., help="A successful OCI command to learn from.", metavar="OCI_COMMAND_STRING...")
 ):
+    """Learns the structure of a successful command to create a new validation template."""
     core.learn_from_command(oci_command, TEMPLATES_DIR, COMMON_SCHEMAS)
 
 if __name__ == "__main__":
