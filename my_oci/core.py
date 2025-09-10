@@ -71,20 +71,43 @@ def load_json_from_value(value: str) -> any:
             return json.load(f)
     return json.loads(value)
 
-def validate_command_with_schema(command_parts: list[str], templates_dir: Path, common_schemas: dict) -> bool | None:
+def validate_command_with_schema(command_parts: list[str], templates_dir: Path, common_schemas: dict) -> tuple[bool | None, list[str]]:
+    """
+    Validates the command. Returns a tuple: (validation_success, modified_command_parts).
+    """
     command_base = [p for p in command_parts if not p.startswith('--')][:4]
     schema = find_schema_for_command(command_base, templates_dir)
     if not schema:
-        console.print("[yellow]Info: No validation schema found for this command. Proceeding without deep validation.[/yellow]")
-        return None
+        console.print("[yellow]Info: No validation schema found. Proceeding without deep validation.[/yellow]")
+        return None, command_parts
 
     console.print(f"✅ Found validation schema: [cyan]{schema['command']}[/cyan]")
     parsed_args = parse_cli_args(command_parts)
+    modified_command_parts = list(command_parts) # Work on a copy
 
     for required in schema.get('required_args', []):
         if required not in parsed_args:
+            console.print(f"[yellow]Warning:[/] Missing required argument: [bold]{required}[/bold]")
+            
+            # Create a search key from the flag (e.g., --compartment-id -> COMPARTMENT_ID)
+            search_key = required.strip('-').replace('-', '_').upper()
+            
+            # Find candidate variables in the environment
+            candidates = [v for v in os.environ if search_key in v]
+            
+            if candidates:
+                if typer.confirm(f"  I found [cyan]{', '.join(candidates)}[/cyan] in your .env. Add [bold]{required}[/bold] using one of these?"):
+                    # For simplicity, we'll use the first candidate found.
+                    # A more advanced version could present a choice.
+                    chosen_var = candidates[0]
+                    console.print(f"  Injecting [bold]{required} '{os.environ[chosen_var]}'[/bold] into the command.")
+                    modified_command_parts.extend([required, os.environ[chosen_var]])
+                    # Re-parse args to acknowledge the addition for subsequent checks
+                    parsed_args = parse_cli_args(modified_command_parts)
+                    continue # Continue to the next required arg check
+            
             console.print(f"[bold red]Validation Error:[/] Missing required argument: {required}")
-            return False
+            return False, modified_command_parts
 
     for arg_name, arg_schema in schema.get('arg_schemas', {}).items():
         if arg_name in parsed_args:
@@ -96,19 +119,20 @@ def validate_command_with_schema(command_parts: list[str], templates_dir: Path, 
 
             if value is None and arg_schema.get('type') != 'boolean':
                 console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] Expected a value, but none was provided.")
-                return False
+                return False, modified_command_parts
             try:
                 instance = load_json_from_value(value) if arg_schema.get('type') in ['object', 'array'] else value
                 validate(instance=instance, schema=arg_schema)
             except ValidationError as e:
                 console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] {e.message}")
                 if 'pattern' in arg_schema and arg_schema.get('description'): console.print(f"  [bold cyan]Hint:[/] {arg_schema['description']}")
-                return False
+                return False, modified_command_parts
             except Exception as e:
                 console.print(f"[bold red]Validation Error in argument '{arg_name}':[/] {e}")
-                return False
+                return False, modified_command_parts
+                
     console.print("[green]✅ Command passed all structural and format validation checks.[/green]")
-    return True
+    return True, modified_command_parts
 
 # --- HELPER & EXECUTION LOGIC ---
 
