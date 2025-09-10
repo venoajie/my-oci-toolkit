@@ -1,17 +1,16 @@
 # my_oci\templates\common_schemas.yaml
 # This file contains reusable validation schemas for common OCI arguments.
 # It is the single source of truth for data formats.
-
-common_oci_args:
-  compartment_id:
-    type: string
-    pattern: "^ocid1\\.compartment\\.oc1\\..*$"
-    description: "Must be a valid Compartment OCID (starts with 'ocid1.compartment...'), not a Tenancy OCID."
-  
+common_oci_args:  
   tenancy_id:
     type: string
     pattern: "^ocid1\\.tenancy\\.oc1\\..*$"
     description: "Must be a valid Tenancy OCID (starts with 'ocid1.tenancy...')."
+  
+  compartment_id:
+    type: string
+    # The description now serves as a helpful hint.
+    description: "Must be a valid OCID. OCI CLI allows either a Compartment OCID or a Tenancy OCID for this flag."
 
   subnet_id:
     type: string
