@@ -1,5 +1,5 @@
 
-# myoci/cli.py
+# myoci/cli.py (DEBUGGING VERSION)
 import shlex
 import typer
 import os
@@ -35,9 +35,6 @@ def run_command(
     ci: bool = typer.Option(False, "--ci", help="Enable non-interactive (CI) mode. Fails on ambiguity."),
     redact: bool = typer.Option(True, "--redact/--no-redact", help="Toggle PII redaction on output.")
 ):
-    """
-    Validates and executes an OCI command against known-good templates.
-    """
     console.rule("[bold cyan]MyOCI Validator Session Started[/]", style="cyan")
 
     console.print("[1/4] 🔍 [bold]Resolving environment variables...[/bold]")
@@ -90,18 +87,28 @@ def run_command(
                     f"I found [bold green]${env_var}[/bold] in your environment. Would you like to retry with this argument added?"
                 )
                 if typer.confirm(prompt_text, default=False):
-                    # --- SIMPLIFIED AND CORRECTED LOGIC ---
-                    # Directly use the value from the environment. No re-resolving needed.
                     final_command = resolved_cmd + [missing_flag, os.environ[env_var]]
                     console.print("\n[bold]Re-running with suggested fix...[/bold]")
                     
                     retry_code, retry_stdout, retry_stderr = core.execute_command(final_command)
+                    
+                    # --- START OF DEBUGGING PRINTS ---
+                    console.print("\n[bold magenta]--- DEBUGGING INFO ---[/bold magenta]")
+                    console.print(f"[DEBUG] Retry Return Code: {retry_code}")
+                    console.print(f"[DEBUG] Retry STDOUT (raw): {repr(retry_stdout)}")
+                    console.print(f"[DEBUG] Retry STDERR (raw): {repr(retry_stderr)}")
+                    # --- END OF DEBUGGING PRINTS ---
+
                     if retry_code == 0:
-                        return_code = 0 # Update final status
+                        console.print("[DEBUG] Entered 'retry_code == 0' block.")
+                        return_code = 0 
                         console.print("[bold green]✅ Retry Succeeded![/]")
                         output_to_print = core.redact_output(retry_stdout) if redact else retry_stdout
                         if output_to_print:
+                            console.print("[DEBUG] Entered 'if output_to_print:' block. Printing now.")
                             print(output_to_print.strip())
+                        else:
+                            console.print("[DEBUG] SKIPPED 'if output_to_print:' block because variable was empty.")
                     else:
                         console.print("[bold red]❌ Retry Failed.[/]")
                         if retry_stderr.strip():
@@ -121,9 +128,6 @@ def run_command(
 def learn_command(
     oci_command: list[str] = typer.Argument(..., help="A successful OCI command to learn from.", metavar="OCI_COMMAND_STRING...")
 ):
-    """
-    Learns the structure of a successful command to create a new validation template.
-    """
     core.learn_from_command(oci_command, TEMPLATES_DIR, COMMON_SCHEMAS)
 
 if __name__ == "__main__":
