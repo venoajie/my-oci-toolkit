@@ -1,3 +1,4 @@
+# my_oci\cli.py
 import typer
 from pathlib import Path
 from dotenv import load_dotenv
@@ -10,28 +11,22 @@ console = Console()
 app = typer.Typer(help="MyOCI: Your personal architect for the OCI CLI.")
 
 try:
-    # This determines the location of the currently running script
     APP_SCRIPT_DIR = Path(__file__).resolve().parent
 except NameError:
-    # Fallback for environments where __file__ is not defined
     APP_SCRIPT_DIR = Path.cwd()
 
-# The project root is one level up from the 'my_oci' package directory
 PROJECT_ROOT_DIR = APP_SCRIPT_DIR.parent
-
-# --- PATH DEFINITIONS ---
-# .env file is in the project root
 DOTENV_PATH = PROJECT_ROOT_DIR / ".env"
-# Templates are now INSIDE the package, relative to this script file
 TEMPLATES_DIR = APP_SCRIPT_DIR / "templates"
-
 TEMPLATES_DIR.mkdir(exist_ok=True)
 load_dotenv(dotenv_path=DOTENV_PATH)
 
 COMMON_SCHEMAS_PATH = TEMPLATES_DIR / "common_schemas.yaml"
 COMMON_SCHEMAS = core.load_common_schemas(COMMON_SCHEMAS_PATH)
 
+
 # --- CLI COMMANDS ---
+
 @app.command("run")
 def run_command(
     oci_command: list[str] = typer.Argument(..., help="The raw OCI command and its arguments.", metavar="OCI_COMMAND_STRING..."),
@@ -56,13 +51,27 @@ def run_command(
     
     console.print("[3/4] 📝 [bold]Validating command against schema...[/bold]")
     validation_result, resolved_cmd = core.validate_command_with_schema(resolved_cmd, TEMPLATES_DIR, COMMON_SCHEMAS)
+    
+    # --- Improved Messaging Logic ---
     if validation_result is False:
         console.rule("[bold red]Session Aborted[/]", style="red"); raise typer.Exit(1)
+    elif validation_result is True:
+        console.print("[green]✅ Command passed all structural and format validation checks.[/green]")
+    else: # This is the case where validation_result is None
+        console.print("[yellow]Info: No validation schema found for this command. Proceeding without deep validation.[/yellow]")
     
     console.print("\n[4/4] ▶️  [bold]Executing command...[/bold]")
     return_code = core.execute_command(resolved_cmd, redact)
-        
+    
     console.rule("[bold cyan]Validator Session Ended[/]", style="cyan")
+
+    # --- Proactive Learning Logic ---
+    if return_code == 0 and validation_result is None and not ci:
+        console.print() # Add a blank line for spacing
+        if typer.confirm("✨ This unvalidated command succeeded. Would you like to create a validation template from it now?"):
+            # We use the original `oci_command` so variables are preserved for learning
+            core.learn_from_command(oci_command, TEMPLATES_DIR, COMMON_SCHEMAS)
+
     if return_code != 0:
         raise typer.Exit(return_code)
 

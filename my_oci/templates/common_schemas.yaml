@@ -1,3 +1,4 @@
+# my_oci\templates\common_schemas.yaml
 # This file contains reusable validation schemas for common OCI arguments.
 # It is the single source of truth for data formats.
 

@@ -1,5 +1,5 @@
+# my_oci\core.py
 import os
-import sys
 import subprocess
 import typer
 import re
@@ -78,7 +78,6 @@ def validate_command_with_schema(command_parts: list[str], templates_dir: Path, 
     command_base = [p for p in command_parts if not p.startswith('--')][:4]
     schema = find_schema_for_command(command_base, templates_dir)
     if not schema:
-        console.print("[yellow]Info: No validation schema found. Proceeding without deep validation.[/yellow]")
         return None, command_parts
 
     console.print(f"✅ Found validation schema: [cyan]{schema['command']}[/cyan]")

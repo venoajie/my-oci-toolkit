@@ -1,4 +1,4 @@
-# templates/oci_compute_instance_launch.yaml
+# my_oci\templates\common_schemas.yaml
 command: oci compute instance launch
 
 # Principle 1: Completeness - List ALL logically required args.
